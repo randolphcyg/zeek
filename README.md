@@ -17,21 +17,22 @@ Docker is the recommended installation path because the image includes the valid
 
 ```bash
 docker pull ghcr.io/randolphcyg/zeek_mcp:latest
-mkdir -p ./zeek_runner/pcaps ./zeek_runner/outputs
+mkdir -p ~/zeek_mcp_outputs
 ```
 
-Use this command shape in MCP clients:
+Use this command shape in MCP clients (macOS):
 
 ```bash
 docker run --rm -i \
-  -v "$PWD/zeek_runner/pcaps:/pcaps:ro" \
-  -v "$PWD/zeek_runner/outputs:/outputs" \
+  -v /Users:/Users:ro \
+  -v ~/zeek_mcp_outputs:/outputs \
   -e ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=false \
-  -e "ZEEK_MCP_PATH_MAPS=$PWD/zeek_runner/pcaps=/pcaps,$PWD/zeek_runner/outputs=/outputs" \
   ghcr.io/randolphcyg/zeek_mcp:latest \
   --base-dir /app \
   --scripts-dir /app/scripts
 ```
+
+By mounting `/Users:/Users:ro`, agents can reference any pcap by its original absolute path (e.g. `/Users/alice/Downloads/capture.pcap`) without path mapping.
 
 For first-time setup, see `docs/quickstart.md`. For MCP tool parameters and examples, see `docs/tools.md`.
 
@@ -70,21 +71,39 @@ Docker builds use the current Docker daemon platform by default. Pass `--platfor
 ./bin/zeek_mcp --base-dir /path/to/zeek_mcp --scripts-dir /path/to/zeek_mcp/scripts
 ```
 
-Docker is the recommended MCP runtime when you need the bundled Zeek 8.0.8 environment. Mount pcap inputs and output directories explicitly:
+Docker is the recommended MCP runtime when you need the bundled Zeek 8.0.8 environment. Mount the host user directory at the same path for transparent path access:
+
+```bash
+# macOS — mount /Users so any absolute path works directly
+docker run --rm -i \
+  -v /Users:/Users:ro \
+  -v ~/zeek_mcp_outputs:/outputs \
+  ghcr.io/randolphcyg/zeek_mcp:latest \
+  --base-dir /app \
+  --scripts-dir /app/scripts
+
+# Linux — mount /home (add other directories as needed)
+docker run --rm -i \
+  -v /home:/home:ro \
+  -v ~/zeek_mcp_outputs:/outputs \
+  ghcr.io/randolphcyg/zeek_mcp:latest \
+  --base-dir /app \
+  --scripts-dir /app/scripts
+```
+
+With this approach, agents can use any host path directly (e.g. `/Users/alice/Downloads/capture.pcap`). No `ZEEK_MCP_PATH_MAPS` configuration is needed.
+
+For restricted environments where you want to limit pcap access to a specific directory, use explicit path maps:
 
 ```bash
 docker run --rm -i \
-  -v /host/pcaps:/pcaps \
+  -v /host/pcaps:/pcaps:ro \
   -v /host/outputs:/outputs \
   -e ZEEK_MCP_PATH_MAPS=/host/pcaps=/pcaps,/host/outputs=/outputs \
   zeek_mcp:latest \
   --base-dir /app \
   --scripts-dir /app/scripts
 ```
-
-The path mapper lets tools accept either a container path such as `/pcaps/sample.pcap` or a mapped host path such as `/host/pcaps/sample.pcap`.
-
-Docker containers cannot read arbitrary host paths. If a user provides a pcap outside mounted paths, Zeek MCP returns `path_not_mounted` with the configured mappings and recommended intake directories. Put pcaps under the mounted intake directory or add a Docker volume and matching path map before starting the MCP server.
 
 Execution tools write persistent artifacts under `/outputs/runs/<run_id>/` by default:
 
@@ -110,7 +129,8 @@ Useful environment variables:
 
 - `ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=true` enables `zeek_run_custom_script`.
 - `ZEEK_MCP_RETAIN_WORKDIR=true` keeps temporary Zeek work directories and returns log paths for debugging.
-- `ZEEK_MCP_PATH_MAPS=/host/pcaps=/pcaps,/host/outputs=/outputs` maps host paths that an MCP client may send into Docker-visible paths.
+- `ZEEK_MCP_PATH_MAPS=/host/pcaps=/pcaps,/host/outputs=/outputs` maps host paths that an MCP client may send into Docker-visible paths. Not needed when using same-path mounts like `-v /Users:/Users:ro`.
+- `ZEEK_MCP_HOST_MOUNT=/host` fallback mount point for container environments where the host filesystem is mounted at a different prefix (e.g. `-v /:/host:ro`).
 - `ZEEK_MCP_ARTIFACT_RETENTION_DAYS=0` disables automatic age-based cleanup by default.
 - `ZEEK_MCP_ARTIFACT_CLEANUP_ON_START=false` disables startup cleanup by default.
 - `ZEEK_MCP_ARTIFACT_MAX_BYTES=0` disables automatic size-based cleanup by default.

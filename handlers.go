@@ -515,6 +515,15 @@ func (h *Handler) resolveOutputRoot(args map[string]interface{}) (string, error)
 	if dirWritable("/outputs") {
 		return "/outputs", nil
 	}
+	// Fallback: use <baseDir>/outputs when no explicit output mount exists
+	// (e.g. running locally without Docker). Similar to gowireshark-cli's
+	// default of using GOWIRESHARK_OUTPUT_DIR or os.TempDir().
+	if h.baseDir != "" {
+		localOutputs := filepath.Join(h.baseDir, "outputs")
+		if err := os.MkdirAll(localOutputs, 0755); err == nil {
+			return localOutputs, nil
+		}
+	}
 	return "", fmt.Errorf("output_dir_unavailable: configure a writable output mount such as /outputs or pass output_dir under a configured path map")
 }
 

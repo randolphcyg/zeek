@@ -33,7 +33,7 @@ type PathResolutionError struct {
 
 func (e *PathResolutionError) Error() string {
 	if len(e.Mappings) == 0 {
-		return fmt.Sprintf("%s %q is not accessible and no path maps are configured", e.Field, e.Path)
+		return fmt.Sprintf("%s %q does not exist; provide a valid absolute path to the file", e.Field, e.Path)
 	}
 	return fmt.Sprintf("%s %q is not accessible inside the container; mount it or pass a path under one of the configured host prefixes", e.Field, e.Path)
 }
@@ -71,6 +71,30 @@ func (r *PathResolver) ResolveExisting(field, requested string) (PathResolution,
 	resolution := r.resolve(requested, true)
 	if _, err := os.Stat(resolution.Resolved); err == nil {
 		return resolution, nil
+	}
+	// When no path maps are configured, accept any absolute path that exists
+	// on the filesystem (same behavior as gowireshark-cli without GOWIRESHARK_PCAP_DIR).
+	if len(r.maps) == 0 && filepath.IsAbs(requested) {
+		absPath := filepath.Clean(requested)
+		if _, err := os.Stat(absPath); err == nil {
+			return PathResolution{Requested: requested, Resolved: absPath, Mapped: false}, nil
+		}
+	}
+	// Fallback: try host mount prefix for container environments.
+	// When the host filesystem is bind-mounted into the container (e.g. -v /:/host:ro),
+	// users can reference any absolute host path without explicit path-map configuration.
+	// The mount point defaults to /host but can be overridden via ZEEK_MCP_HOST_MOUNT.
+	if filepath.IsAbs(requested) {
+		hostMount := os.Getenv("ZEEK_MCP_HOST_MOUNT")
+		if hostMount == "" {
+			hostMount = "/host"
+		}
+		if info, err := os.Stat(hostMount); err == nil && info.IsDir() {
+			hostMountPath := filepath.Join(hostMount, requested)
+			if _, err := os.Stat(hostMountPath); err == nil {
+				return PathResolution{Requested: requested, Resolved: hostMountPath, Mapped: true}, nil
+			}
+		}
 	}
 	return resolution, &PathResolutionError{
 		Field:     field,
@@ -131,12 +155,17 @@ func (r *PathResolver) resolve(requested string, onlyWhenMissing bool) PathResol
 		}
 	}
 
-	cleanRequested := filepath.Clean(requested)
+	// Normalize Windows-style backslashes to forward slashes for path map matching.
+	// This allows agents on Windows to pass paths like C:\Users\alice\test.pcap
+	// and have them matched against path maps configured with forward slashes.
+	normalized := strings.ReplaceAll(requested, "\\", "/")
+	cleanRequested := filepath.Clean(normalized)
 	for _, m := range r.maps {
-		if !pathHasPrefix(cleanRequested, m.HostPrefix) {
+		hostPrefix := filepath.Clean(strings.ReplaceAll(m.HostPrefix, "\\", "/"))
+		if !pathHasPrefix(cleanRequested, hostPrefix) {
 			continue
 		}
-		rel, err := filepath.Rel(m.HostPrefix, cleanRequested)
+		rel, err := filepath.Rel(hostPrefix, cleanRequested)
 		if err != nil {
 			continue
 		}
@@ -155,7 +184,7 @@ func (r *PathResolver) resolve(requested string, onlyWhenMissing bool) PathResol
 func normalizePathMaps(maps []PathMap) []PathMap {
 	result := make([]PathMap, 0, len(maps))
 	for _, m := range maps {
-		host := filepath.Clean(strings.TrimSpace(m.HostPrefix))
+		host := filepath.Clean(strings.TrimSpace(strings.ReplaceAll(m.HostPrefix, "\\", "/")))
 		container := filepath.Clean(strings.TrimSpace(m.ContainerPrefix))
 		if host == "." || container == "." {
 			continue
