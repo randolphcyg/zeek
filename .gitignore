@@ -1,0 +1,30 @@
+# Build outputs
+/bin/
+/zeek_mcp
+/zeek_mcp.tar.gz
+/*.tar.gz
+
+# Zeek runtime outputs
+/*.log
+/*.log.gz
+/*_extracted/
+/extract_files/
+/zeek_mcp_*/
+/outputs/
+
+# Packet captures and local samples
+/*.pcap
+/*.pcapng
+/samples/
+/captures/
+/pcaps/
+
+# Local caches and generated indexes
+/.codegraph/
+/.cache/
+/tmp/
+
+# IDE and OS metadata
+/.idea/
+/.vscode/
+.DS_Store

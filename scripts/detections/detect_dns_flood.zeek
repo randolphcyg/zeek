@@ -1,0 +1,61 @@
+# ScriptID: DETECT_DNS_FLOOD_v1
+# Type: detection
+# Category: dos
+# Description: Detect DNS query floods, response floods, and ANY-query amplification patterns.
+# Signature: High-rate DNS requests or responses, including concentrated ANY queries.
+# NoticeTypes: DNS_DDoS::DNS_Query_Flood, DNS_DDoS::DNS_Response_Flood, DNS_DDoS::DNS_Amplification_ANY
+# Enabled: true
+
+@load base/frameworks/notice
+@load base/frameworks/sumstats
+@load base/protocols/dns
+
+module DNS_DDoS;
+
+export {
+    redef enum Notice::Type += { DNS_Query_Flood, DNS_Response_Flood, DNS_Amplification_ANY };
+    const FLOOD_THRESHOLD: double = 100.0 &redef;
+    const ANY_THRESHOLD: double = 20.0 &redef;
+    const CHECK_INTERVAL: interval = 10sec &redef;
+}
+
+event zeek_init() {
+    local r1 = SumStats::Reducer($stream="dns.req.flood", $apply=set(SumStats::SUM));
+    SumStats::create([
+        $name="dns-req-flood", $epoch=CHECK_INTERVAL, $reducers=set(r1), $threshold=FLOOD_THRESHOLD,
+        $threshold_val(key: SumStats::Key, result: SumStats::Result): double = { return result["dns.req.flood"]$sum; },
+        $threshold_crossed(key: SumStats::Key, result: SumStats::Result) = {
+            NOTICE([$note=DNS_Query_Flood, $msg=fmt("DNS query flood detected: source %s sent %.0f queries", key$host, result["dns.req.flood"]$sum), $src=key$host]);
+        }
+    ]);
+
+    local r2 = SumStats::Reducer($stream="dns.resp.flood", $apply=set(SumStats::SUM));
+    SumStats::create([
+        $name="dns-resp-flood", $epoch=CHECK_INTERVAL, $reducers=set(r2), $threshold=FLOOD_THRESHOLD,
+        $threshold_val(key: SumStats::Key, result: SumStats::Result): double = { return result["dns.resp.flood"]$sum; },
+        $threshold_crossed(key: SumStats::Key, result: SumStats::Result) = {
+            NOTICE([$note=DNS_Response_Flood, $msg=fmt("DNS response flood detected: host %s received %.0f responses", key$host, result["dns.resp.flood"]$sum), $src=key$host]);
+        }
+    ]);
+
+    local r3 = SumStats::Reducer($stream="dns.amp.any", $apply=set(SumStats::SUM));
+    SumStats::create([
+        $name="dns-any-detect", $epoch=CHECK_INTERVAL, $reducers=set(r3), $threshold=ANY_THRESHOLD,
+        $threshold_val(key: SumStats::Key, result: SumStats::Result): double = { return result["dns.amp.any"]$sum; },
+        $threshold_crossed(key: SumStats::Key, result: SumStats::Result) = {
+            NOTICE([$note=DNS_Amplification_ANY, $msg=fmt("DNS amplification pattern detected (ANY query): source %s", key$host), $src=key$host]);
+        }
+    ]);
+}
+
+event dns_request(c: connection, msg: dns_msg, query: string, qtype: count, qclass: count, original_query: string) {
+    SumStats::observe("dns.req.flood", SumStats::Key($host=c$id$orig_h), SumStats::Observation($num=1));
+    if ( qtype == 255 ) SumStats::observe("dns.amp.any", SumStats::Key($host=c$id$orig_h), SumStats::Observation($num=1));
+}
+
+event dns_message(c: connection, is_orig: bool, msg: dns_msg, len: count) {
+    if ( msg$QR ) {
+        local victim = is_orig ? c$id$orig_h : c$id$resp_h;
+        SumStats::observe("dns.resp.flood", SumStats::Key($host=victim), SumStats::Observation($num=1));
+    }
+}
