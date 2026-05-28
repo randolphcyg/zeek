@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -56,6 +58,7 @@ func NewMCPServer(baseDir, scriptsDir string, pathMaps []PathMap) *MCPServer {
 	for _, tool := range tools {
 		s.AddTool(tool, handler.dispatchTool)
 	}
+	handler.registerResources(s)
 
 	return &MCPServer{
 		server:   s,
@@ -68,18 +71,48 @@ func NewMCPServer(baseDir, scriptsDir string, pathMaps []PathMap) *MCPServer {
 }
 
 func (h *Handler) dispatchTool(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	start := time.Now()
+	traceID := newTraceID("zeek")
+	result, err := h.dispatchToolInner(ctx, request)
+	status := "success"
+	errorCode := ""
+	if err != nil {
+		status = "exception"
+		errorCode = "INTERNAL_EXCEPTION"
+		result = envelopeResult(request.Params.Name, traceID, errorCode, err.Error(), false)
+		err = nil
+	}
+	if result != nil {
+		if result.Meta == nil {
+			result.Meta = &mcp.Meta{AdditionalFields: map[string]any{}}
+		}
+		if result.Meta.AdditionalFields == nil {
+			result.Meta.AdditionalFields = map[string]any{}
+		}
+		result.Meta.AdditionalFields["trace_id"] = traceID
+		if result.IsError {
+			attachTraceToErrorResult(result, request.Params.Name, traceID)
+			status = "semantic_failure"
+			errorCode = errorCodeFromResult(result)
+		}
+	}
+	writeToolCallLog(request.Params.Name, traceID, getArgs(request), status, errorCode, result, time.Since(start))
+	return result, nil
+}
+
+func (h *Handler) dispatchToolInner(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	switch request.Params.Name {
 	case "zeek_list_detection_scripts":
 		return h.handleListScripts(ctx, request)
-	case "zeek_inspect_pcap":
+	case "zeek_inspect_capture":
 		return h.handleGetPcapInfo(ctx, request)
-	case "zeek_run_detection":
+	case "zeek_detect_threats":
 		return h.handleRunDetection(ctx, request)
 	case "zeek_extract_files":
 		return h.handleExtractFiles(ctx, request)
 	case "zeek_get_detection_script":
 		return h.handleGetScriptDetail(ctx, request)
-	case "zeek_health":
+	case "zeek_health_check":
 		return h.handleHealthCheck(ctx, request)
 	case "zeek_validate_script":
 		return h.handleSyntaxCheck(ctx, request)
@@ -91,19 +124,58 @@ func (h *Handler) dispatchTool(ctx context.Context, request mcp.CallToolRequest)
 		return h.handleRunCustomScript(ctx, request)
 	case "zeek_generate_logs":
 		return h.handleGenerateLogs(ctx, request)
-	case "zeek_run_intel_match":
+	case "zeek_match_intel":
 		return h.handleRunIntelMatch(ctx, request)
 	case "zeek_run_signature":
 		return h.handleRunSignature(ctx, request)
-	case "zeek_get_artifact_manifest":
+	case "zeek_get_run_manifest":
 		return h.handleGetArtifactManifest(ctx, request)
-	case "zeek_list_analysis_runs":
+	case "zeek_list_runs":
 		return h.handleListAnalysisRuns(ctx, request)
-	case "zeek_cleanup_analysis_runs":
+	case "zeek_cleanup_runs":
 		return h.handleCleanupAnalysisRuns(ctx, request)
+	case "zeek_list_pcaps":
+		return h.handleListPcaps(ctx, request)
+	case "zeek_triage_pcap":
+		return h.handleTriagePcap(ctx, request)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", request.Params.Name)), nil
 	}
+}
+
+func newTraceID(prefix string) string {
+	if v := os.Getenv("MCP_TRACE_ID"); v != "" {
+		return v
+	}
+	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), os.Getpid())
+}
+
+func writeToolCallLog(toolName, traceID string, input any, status, errorCode string, result *mcp.CallToolResult, duration time.Duration) {
+	path := os.Getenv("MCP_CALL_LOG_PATH")
+	if path == "" {
+		return
+	}
+	record := map[string]any{
+		"timestamp":        time.Now().UTC().Format(time.RFC3339Nano),
+		"trace_id":         traceID,
+		"tool_name":        toolName,
+		"normalized_input": input,
+		"status":           status,
+		"error_code":       errorCode,
+		"duration_ms":      duration.Milliseconds(),
+		"output_bytes":     resultTextBytes(result),
+		"artifact_paths":   []string{},
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
 }
 
 func (ms *MCPServer) Run() error {

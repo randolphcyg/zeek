@@ -30,7 +30,7 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_inspect_pcap",
+			Name:        "zeek_inspect_capture",
 			Description: "Inspect a pcap file and return capture metadata, observed protocols, and suggested Zeek detection scripts.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -44,8 +44,8 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_run_detection",
-			Description: "Run bundled Zeek detection scripts against a pcap and return normalized alerts, evidence, IOCs, and execution statistics.",
+			Name:        "zeek_detect_threats",
+			Description: "Run bundled Zeek detection scripts against a pcap and return normalized alerts, evidence, IOCs, and execution statistics. If pcap_path fails, call zeek_list_pcaps and retry with a returned path.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -109,7 +109,7 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_health",
+			Name:        "zeek_health_check",
 			Description: "Return Zeek MCP health, server version, Zeek availability, and loaded script counts.",
 			InputSchema: mcp.ToolInputSchema{
 				Type:       "object",
@@ -209,7 +209,7 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_run_intel_match",
+			Name:        "zeek_match_intel",
 			Description: "Run Zeek Intel framework matching for supplied indicators or an Intel TSV file and return normalized hits.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -261,7 +261,7 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_get_artifact_manifest",
+			Name:        "zeek_get_run_manifest",
 			Description: "Read an analysis run artifact manifest by run_id or manifest_path so downstream agents can continue analysis.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -282,7 +282,7 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_list_analysis_runs",
+			Name:        "zeek_list_runs",
 			Description: "List recent analysis runs from the configured output directory.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -299,7 +299,7 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_cleanup_analysis_runs",
+			Name:        "zeek_cleanup_runs",
 			Description: "Preview or delete old analysis run artifacts from the configured output directory. Deletion requires dry_run=false and confirm=true.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -325,6 +325,42 @@ func buildTools() []mcp.Tool {
 						"description": "Optional output root to clean. Defaults to /outputs when mounted.",
 					},
 				},
+			},
+		},
+		{
+			Name:        "zeek_list_pcaps",
+			Description: "List PCAP files from configured intake directories. Returned path values are directly usable as pcap_path in Zeek tools.",
+			InputSchema: mcp.ToolInputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"directory": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional mounted intake directory to list. Defaults to configured non-output path map directories.",
+					},
+				},
+			},
+		},
+		{
+			Name:        "zeek_triage_pcap",
+			Description: "High-success workflow tool: inspect one pcap, run bundled detections, and return a compact triage summary plus manifest references.",
+			InputSchema: mcp.ToolInputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"pcap_path": map[string]interface{}{
+						"type":        "string",
+						"description": "Path returned by zeek_list_pcaps or a path under a configured path map.",
+					},
+					"scripts": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Optional detection script names or ScriptIDs. Omit to run all enabled detection scripts.",
+					},
+					"output_dir": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional output root. Defaults to /outputs when writable.",
+					},
+				},
+				Required: []string{"pcap_path"},
 			},
 		},
 	}

@@ -2,14 +2,16 @@
 
 ## Pcap Triage
 
-1. Call `zeek_inspect_pcap` with the absolute pcap path.
-2. Review `protocols` and `suggested_scripts`.
-3. Call `zeek_list_detection_scripts` with `type=detection` and optional `category`.
-4. Run `zeek_run_detection` with a focused `scripts` list.
+1. Call `zeek_health_check` to confirm Zeek and path maps are available.
+2. Call `zeek_list_pcaps` and reuse a returned `path` value.
+3. Call `zeek_triage_pcap` for the default high-success flow.
+4. For manual control, call `zeek_inspect_capture`, review `protocols` and `suggested_scripts`, then run `zeek_detect_threats`.
 
 Agents should report low-confidence or empty findings plainly. They should not invent malicious activity when Zeek returns no relevant evidence.
 
-When the server runs in the default Zeek-only Docker image, `zeek_inspect_pcap` uses a Zeek log fallback if `tshark` and `capinfos` are unavailable. Treat fallback warnings as reduced packet-level metadata, not as a detection failure. Use `zeek_generate_logs` or `zeek_run_detection` for deeper Zeek-native analysis.
+For packet-level verification, pass alerts from `zeek_triage_pcap` to gowireshark MCP using `gowireshark_verify_zeek_alert`, then create evidence with `gowireshark_create_evidence_bundle` only after narrowing the filter.
+
+When the server runs in the default Zeek-only Docker image, `zeek_inspect_capture` uses a Zeek log fallback if `tshark` and `capinfos` are unavailable. Treat fallback warnings as reduced packet-level metadata, not as a detection failure. Use `zeek_generate_logs` or `zeek_detect_threats` for deeper Zeek-native analysis.
 
 ## Intake And Artifacts
 
@@ -19,20 +21,20 @@ Every execution tool creates a persistent run directory under `/outputs/runs/<ru
 
 Use this handoff pattern for multi-agent workflows:
 
-1. Detection agent runs `zeek_run_detection`, `zeek_generate_logs`, or `zeek_extract_files`.
-2. File-analysis agent calls `zeek_get_artifact_manifest` and reads artifacts where `kind=extracted_file`.
+1. Detection agent runs `zeek_detect_threats`, `zeek_generate_logs`, or `zeek_extract_files`.
+2. File-analysis agent calls `zeek_get_run_manifest` and reads artifacts where `kind=extracted_file`.
 3. Log-analysis agent reads artifacts where `kind=zeek_log`.
 4. Report agent writes summaries under the same run's `reports/` directory and references the original `manifest.json`.
 
 ## Artifact Cleanup
 
-Artifacts are retained by default. Use `zeek_list_analysis_runs` to review `artifact_bytes` and `total_bytes`, then use `zeek_cleanup_analysis_runs` with `dry_run=true` before deleting.
+Artifacts are retained by default. Use `zeek_list_runs` to review `artifact_bytes` and `total_bytes`, then use `zeek_cleanup_runs` with `dry_run=true` before deleting.
 
 Actual deletion requires `dry_run=false` and `confirm=true`. Agents should never request destructive cleanup unless the user explicitly asks for it.
 
 ## Full Detection Sweep
 
-Call `zeek_run_detection` with only `pcap_path`. The server runs all enabled detection scripts and excludes extraction scripts unless `extract_files=true`.
+Call `zeek_detect_threats` with only `pcap_path`. The server runs all enabled detection scripts and excludes extraction scripts unless `extract_files=true`.
 
 To run several selected scripts against the same pcap in one execution, pass a `scripts` array:
 
@@ -69,7 +71,7 @@ The tool returns compact JSON samples and field lists so agents can decide wheth
 
 ## Intel Matching
 
-Use `zeek_run_intel_match` with:
+Use `zeek_match_intel` with:
 
 ```json
 {

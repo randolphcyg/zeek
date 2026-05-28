@@ -25,7 +25,7 @@ Execution tools return:
 - `artifacts`: persisted logs and extracted files.
 - `warnings` and `errors`: execution diagnostics.
 
-## `zeek_health`
+## `zeek_health_check`
 
 Checks server and Zeek runtime health.
 
@@ -40,7 +40,7 @@ Useful fields:
 - `scripts_loaded`
 - `path_maps`
 
-## `zeek_inspect_pcap`
+## `zeek_inspect_capture`
 
 Inspects a pcap and suggests bundled detection scripts.
 
@@ -75,7 +75,7 @@ Filters:
 - `name`
 - `enabled_only`
 
-## `zeek_run_detection`
+## `zeek_detect_threats`
 
 Runs detection scripts against one pcap.
 
@@ -159,7 +159,7 @@ Useful fields:
 - `log_paths`
 - `artifacts` where `kind=zeek_log`
 
-## `zeek_run_intel_match`
+## `zeek_match_intel`
 
 Runs Zeek Intel matching from inline indicators or an Intel TSV file.
 
@@ -251,7 +251,7 @@ Returns MCP build metadata and Zeek runtime version.
 {}
 ```
 
-## `zeek_get_artifact_manifest`
+## `zeek_get_run_manifest`
 
 Reads a saved artifact manifest for downstream agents.
 
@@ -269,7 +269,7 @@ Or:
 }
 ```
 
-## `zeek_list_analysis_runs`
+## `zeek_list_runs`
 
 Lists saved analysis runs.
 
@@ -285,7 +285,7 @@ Useful fields:
 - `total_bytes`
 - `runs[].artifact_bytes`
 
-## `zeek_cleanup_analysis_runs`
+## `zeek_cleanup_runs`
 
 Previews or deletes old artifacts. Defaults to dry-run.
 
@@ -307,5 +307,37 @@ Delete:
   "confirm": true
 }
 ```
+
+## `zeek_list_pcaps`
+
+Lists PCAP files from configured intake directories. Use the returned `path` directly as `pcap_path` in other tools.
+
+```json
+{}
+```
+
+Useful fields:
+
+- `pcaps[].name`
+- `pcaps[].path`
+- `pcaps[].size`
+
+## `zeek_triage_pcap`
+
+Runs the recommended Agent workflow in one call: inspect capture metadata, run bundled detections, persist artifacts, and return a compact summary.
+
+```json
+{
+  "pcap_path": "/pcaps/sample.pcap"
+}
+```
+
+Useful fields:
+
+- `capture.protocols`
+- `alerts`
+- `run_id`
+- `manifest_path`
+- `recommended_next`
 
 Agents should only delete artifacts after explicit user approval.

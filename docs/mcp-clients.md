@@ -104,7 +104,7 @@ With that mapping, tools may receive either `/pcaps/sample.pcap` or `/absolute/p
 
 The `/pcaps` mount is the read-only intake directory. The `/outputs` mount must be writable because execution tools create `/outputs/runs/<run_id>/` with `logs/`, `extracted/`, `reports/`, and `manifest.json`. A project mount is optional and can remain read-only because runtime scripts are baked into the image under `/app/scripts`.
 
-Downstream agents should use `run_id`, `manifest_path`, `zeek_get_artifact_manifest`, and `zeek_list_analysis_runs` to continue file analysis, log analysis, or report generation.
+Downstream agents should use `run_id`, `manifest_path`, `zeek_get_run_manifest`, and `zeek_list_runs` to continue file analysis, log analysis, or report generation.
 
 Build options:
 
@@ -113,7 +113,7 @@ Build options:
 ./build.sh -d --with-pcap-tools
 ```
 
-The default Docker image is Zeek-only. `zeek_inspect_pcap` will use a Zeek log fallback when `tshark` and `capinfos` are absent. `--with-pcap-tools` adds packet-level metadata from Wireshark CLI tools, which can improve duration, packet count, and protocol hierarchy details but increases image size.
+The default Docker image is Zeek-only. `zeek_inspect_capture` will use a Zeek log fallback when `tshark` and `capinfos` are absent. `--with-pcap-tools` adds packet-level metadata from Wireshark CLI tools, which can improve duration, packet count, and protocol hierarchy details but increases image size.
 
 If BuildKit cannot reach the registry metadata endpoint but the base images are already cached locally, build with:
 

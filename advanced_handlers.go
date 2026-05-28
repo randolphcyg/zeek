@@ -129,7 +129,7 @@ redef Intel::read_files += { "%s" };
 		return outputErrorResult(err), nil
 	}
 
-	result := h.executor.RunScriptsWithLogSummary(ctx, "zeek_run_intel_match", pcapResolution.Resolved, []string{scriptPath}, []string{"intel", "notice", "conn", "dns", "http", "files"}, 50, artifactRun)
+	result := h.executor.RunScriptsWithLogSummary(ctx, "zeek_match_intel", pcapResolution.Resolved, []string{scriptPath}, []string{"intel", "notice", "conn", "dns", "http", "files"}, 50, artifactRun)
 	result.PcapPath = pcapPath
 	result.RequestedPath = pcapResolution.Requested
 	result.ResolvedPath = pcapResolution.Resolved

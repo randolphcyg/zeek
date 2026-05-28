@@ -51,7 +51,7 @@ Docker builds use `zeek/zeek:8.0.8` by default. The default image is Zeek-only a
 ./build.sh -d
 ```
 
-Build the larger inspection image when you want `zeek_inspect_pcap` to use `capinfos` and `tshark` for packet counts, durations, and protocol hierarchy summaries:
+Build the larger inspection image when you want `zeek_inspect_capture` to use `capinfos` and `tshark` for packet counts, durations, and protocol hierarchy summaries:
 
 ```bash
 ./build.sh -d --with-pcap-tools
@@ -96,9 +96,9 @@ runs/<run_id>/
   manifest.json
 ```
 
-The response includes `run_id`, `run_dir`, `manifest_path`, and `artifacts`. Downstream agents should read `manifest.json` or call `zeek_get_artifact_manifest` instead of guessing output paths.
+The response includes `run_id`, `run_dir`, `manifest_path`, and `artifacts`. Downstream agents should read `manifest.json` or call `zeek_get_run_manifest` instead of guessing output paths.
 
-`tshark` and `capinfos` are not required for core detection, extraction, log generation, Intel matching, signature matching, or custom script execution. Without them, `zeek_inspect_pcap` still validates paths and returns Zeek-driven suggestions where possible, but protocol and timing metadata may be sparse and warnings will explain the reduced inspection capability.
+`tshark` and `capinfos` are not required for core detection, extraction, log generation, Intel matching, signature matching, or custom script execution. Without them, `zeek_inspect_capture` still validates paths and returns Zeek-driven suggestions where possible, but protocol and timing metadata may be sparse and warnings will explain the reduced inspection capability.
 
 If Docker BuildKit fails while checking remote base-image metadata but `zeek/zeek:8.0.8` is already cached locally, use the local builder:
 
@@ -144,32 +144,38 @@ Every script uses the same metadata header:
 # Enabled: true
 ```
 
-Extraction scripts are discoverable, but `zeek_run_detection` only runs `Type: detection` scripts by default. File extraction is enabled through `zeek_extract_files` or `extract_files=true`.
+Extraction scripts are discoverable, but `zeek_detect_threats` only runs `Type: detection` scripts by default. File extraction is enabled through `zeek_extract_files` or `extract_files=true`.
 
 ## MCP Tools
 
 - `zeek_list_detection_scripts`: list bundled scripts and metadata.
-- `zeek_inspect_pcap`: inspect capture metadata and suggest scripts.
-- `zeek_run_detection`: run bundled detection scripts and return normalized alerts.
+- `zeek_inspect_capture`: inspect capture metadata and suggest scripts.
+- `zeek_detect_threats`: run bundled detection scripts and return normalized alerts.
 - `zeek_extract_files`: extract suspicious transferred files.
 - `zeek_get_detection_script`: return script metadata and optional source.
-- `zeek_health`: report server and Zeek availability.
+- `zeek_health_check`: report server and Zeek availability.
 - `zeek_validate_script`: run `zeek --parse-only`.
 - `zeek_get_version`: return Zeek and MCP versions.
 - `zeek_reload_scripts`: rescan the script tree.
 - `zeek_run_custom_script`: validate and run generated Zeek scripts when explicitly enabled.
 - `zeek_generate_logs`: summarize selected Zeek logs.
-- `zeek_run_intel_match`: run Zeek Intel matching for supplied indicators.
+- `zeek_match_intel`: run Zeek Intel matching for supplied indicators.
 - `zeek_run_signature`: run Zeek signature files or content.
-- `zeek_get_artifact_manifest`: read a saved run manifest by `run_id` or `manifest_path`.
-- `zeek_list_analysis_runs`: list recent saved analysis runs.
-- `zeek_cleanup_analysis_runs`: preview or delete old analysis runs; deletion requires `dry_run=false` and `confirm=true`.
+- `zeek_get_run_manifest`: read a saved run manifest by `run_id` or `manifest_path`.
+- `zeek_list_runs`: list recent saved analysis runs.
+- `zeek_cleanup_runs`: preview or delete old analysis runs; deletion requires `dry_run=false` and `confirm=true`.
+- `zeek_list_pcaps`: list configured intake PCAPs and return tool-ready paths.
+- `zeek_triage_pcap`: inspect a capture, run detections, and return a compact triage summary for downstream Wireshark verification.
 
-`zeek_run_detection` supports multiple scripts in one pcap analysis through the `scripts` array. If `scripts` is omitted, Zeek MCP runs all enabled detection scripts.
+`zeek_detect_threats` supports multiple scripts in one pcap analysis through the `scripts` array. If `scripts` is omitted, Zeek MCP runs all enabled detection scripts.
+
+Tool names are intentionally breaking and Agent-oriented. Removed legacy names are not registered. Restart MCP clients after upgrading so they refresh the schema.
+
+Set `MCP_CALL_LOG_PATH=/path/to/zeek-mcp-calls.jsonl` to record JSONL tool-call telemetry with `trace_id`, `tool_name`, `status`, `error_code`, `duration_ms`, and `output_bytes`.
 
 ## Artifact Retention
 
-Zeek MCP does not delete analysis artifacts by default. This avoids accidental loss of evidence. Use `zeek_cleanup_analysis_runs` for manual cleanup:
+Zeek MCP does not delete analysis artifacts by default. This avoids accidental loss of evidence. Use `zeek_cleanup_runs` for manual cleanup:
 
 ```json
 {

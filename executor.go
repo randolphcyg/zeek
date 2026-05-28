@@ -118,7 +118,7 @@ func NewExecutor(config ExecutorConfig) *Executor {
 func (e *Executor) RunDetection(ctx context.Context, pcapPath string, scripts []string, extractDir string, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:     "zeek_run_detection",
+		Tool:     "zeek_detect_threats",
 		PcapPath: pcapPath,
 		Status:   "completed",
 		Alerts:   []StandardAlert{},

@@ -117,7 +117,7 @@ func (h *Handler) handleGetPcapInfo(ctx context.Context, request mcp.CallToolReq
 	suggestion := h.generateScriptSuggestions(info)
 
 	resp := map[string]interface{}{
-		"tool":              "zeek_inspect_pcap",
+		"tool":              "zeek_inspect_capture",
 		"pcap_path":         pcapPath,
 		"requested_path":    pcapResolution.Requested,
 		"resolved_path":     pcapResolution.Resolved,
@@ -332,7 +332,7 @@ func (h *Handler) handleHealthCheck(ctx context.Context, request mcp.CallToolReq
 	compatibility, versionWarnings := zeekCompatibility(runtimeVersion)
 
 	resp := map[string]interface{}{
-		"tool":               "zeek_health",
+		"tool":               "zeek_health_check",
 		"status":             "healthy",
 		"version":            Version,
 		"target_zeek_lts":    TargetZeekLTS,
@@ -596,7 +596,7 @@ func (h *Handler) handleGetArtifactManifest(ctx context.Context, request mcp.Cal
 		return errorResult(fmt.Sprintf("failed to read artifact manifest: %s", err.Error())), nil
 	}
 	resp := map[string]interface{}{
-		"tool":           "zeek_get_artifact_manifest",
+		"tool":           "zeek_get_run_manifest",
 		"requested_path": resolution.Requested,
 		"resolved_path":  resolution.Resolved,
 		"manifest":       manifest,
@@ -619,7 +619,7 @@ func (h *Handler) handleListAnalysisRuns(ctx context.Context, request mcp.CallTo
 	entries, err := os.ReadDir(runsRoot)
 	if err != nil {
 		resp := map[string]interface{}{
-			"tool":        "zeek_list_analysis_runs",
+			"tool":        "zeek_list_runs",
 			"output_dir":  root,
 			"total":       0,
 			"total_bytes": int64(0),
@@ -659,7 +659,7 @@ func (h *Handler) handleListAnalysisRuns(ctx context.Context, request mcp.CallTo
 		summaries = summaries[:limit]
 	}
 	resp := map[string]interface{}{
-		"tool":        "zeek_list_analysis_runs",
+		"tool":        "zeek_list_runs",
 		"output_dir":  root,
 		"total":       len(summaries),
 		"total_bytes": totalAnalysisRunBytes(summaries),
@@ -687,6 +687,146 @@ func (h *Handler) handleCleanupAnalysisRuns(ctx context.Context, request mcp.Cal
 	result := cleanupAnalysisRuns(root, olderThanDays, maxTotalBytes, dryRun, confirm)
 	text, _ := json.MarshalIndent(result, "", "  ")
 	return textResult(string(text)), nil
+}
+
+func (h *Handler) handleListPcaps(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := getArgs(request)
+	var dirs []string
+	if dir, _ := args["directory"].(string); dir != "" {
+		resolution := h.paths.resolve(dir, false)
+		dirs = []string{resolution.Resolved}
+	} else {
+		dirs = h.paths.RecommendedIntakeDirs()
+	}
+	if len(dirs) == 0 {
+		dirs = append(dirs, "/pcaps")
+		if h.baseDir != "" {
+			dirs = append(dirs, filepath.Join(h.baseDir, "pcaps"))
+		}
+	}
+	seen := map[string]bool{}
+	var pcaps []map[string]interface{}
+	for _, dir := range dirs {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		items := listPcaps(dir)
+		pcaps = append(pcaps, items...)
+	}
+	resp := map[string]interface{}{
+		"tool":        "zeek_list_pcaps",
+		"directories": dirs,
+		"total":       len(pcaps),
+		"pcaps":       pcaps,
+	}
+	text, _ := json.MarshalIndent(resp, "", "  ")
+	return textResult(string(text)), nil
+}
+
+func (h *Handler) handleTriagePcap(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := getArgs(request)
+	pcapPath, _ := args["pcap_path"].(string)
+	if pcapPath == "" {
+		return errorResult("pcap_path is required"), nil
+	}
+	pcapResolution, err := h.paths.ResolveExisting("pcap_path", pcapPath)
+	if err != nil {
+		return pathErrorResult(err), nil
+	}
+
+	info, infoErr := GetPcapInfoForInspection(pcapResolution.Resolved)
+	var suggested []string
+	if infoErr == nil {
+		suggested = h.generateScriptSuggestions(info)
+	}
+	scriptNames := stringSliceArg(args["scripts"])
+	scriptPaths := h.registry.GetScriptPaths(scriptNames, ScriptTypeDetection)
+	if len(scriptNames) > 0 && len(scriptPaths) == 0 {
+		return errorResult("no matching enabled detection scripts found"), nil
+	}
+	if len(scriptPaths) == 0 {
+		scriptPaths = h.registry.GetScriptPaths(nil, ScriptTypeDetection)
+	}
+
+	artifactRun, err := h.prepareArtifactRun(args)
+	if err != nil {
+		return outputErrorResult(err), nil
+	}
+	result := h.executor.RunDetection(ctx, pcapResolution.Resolved, scriptPaths, "", artifactRun)
+	result.Tool = "zeek_triage_pcap"
+	result.PcapPath = pcapPath
+	result.RequestedPath = pcapResolution.Requested
+	result.ResolvedPath = pcapResolution.Resolved
+	h.finalizeArtifactRun(ctx, result, artifactRun)
+
+	resp := map[string]interface{}{
+		"tool":              "zeek_triage_pcap",
+		"pcap_path":         pcapPath,
+		"requested_path":    pcapResolution.Requested,
+		"resolved_path":     pcapResolution.Resolved,
+		"path_mapped":       pcapResolution.Mapped,
+		"status":            result.Status,
+		"alerts":            result.Alerts,
+		"alert_count":       len(result.Alerts),
+		"errors":            result.Errors,
+		"warnings":          result.Warnings,
+		"run_id":            result.RunID,
+		"manifest_path":     result.ManifestPath,
+		"artifacts":         result.Artifacts,
+		"suggested_scripts": suggested,
+		"recommended_next":  []string{"gowireshark_validate_filter", "gowireshark_verify_zeek_alert"},
+	}
+	if infoErr != nil {
+		resp["inspect_error"] = infoErr.Error()
+	} else {
+		resp["capture"] = map[string]interface{}{
+			"file_size":       info.FileSize,
+			"packet_count":    info.PacketCount,
+			"duration_sec":    info.Duration,
+			"duration_known":  info.DurationKnown,
+			"protocols":       info.Protocols,
+			"top_talkers":     info.TopTalkers,
+			"services":        info.Services,
+			"analyzable":      info.Analyzable,
+			"analysis_status": info.AnalysisStatus,
+			"warnings":        info.Warnings,
+		}
+	}
+	text, _ := json.MarshalIndent(resp, "", "  ")
+	return textResult(string(text)), nil
+}
+
+func listPcaps(dir string) []map[string]interface{} {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var pcaps []map[string]interface{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext != ".pcap" && ext != ".pcapng" && ext != ".cap" {
+			continue
+		}
+		info, _ := entry.Info()
+		size := int64(0)
+		if info != nil {
+			size = info.Size()
+		}
+		pcaps = append(pcaps, map[string]interface{}{
+			"name": name,
+			"path": filepath.Join(dir, name),
+			"size": size,
+		})
+	}
+	sort.Slice(pcaps, func(i, j int) bool {
+		return pcaps[i]["name"].(string) < pcaps[j]["name"].(string)
+	})
+	return pcaps
 }
 
 func retentionInfo(createdAt string) RetentionInfo {
@@ -726,7 +866,7 @@ func totalAnalysisRunBytes(summaries []AnalysisRunSummary) int64 {
 func cleanupAnalysisRuns(outputRoot string, olderThanDays int, maxTotalBytes int64, dryRun bool, confirm bool) CleanupResult {
 	runsRoot := filepath.Join(outputRoot, "runs")
 	result := CleanupResult{
-		Tool:          "zeek_cleanup_analysis_runs",
+		Tool:          "zeek_cleanup_runs",
 		OutputDir:     outputRoot,
 		DryRun:        dryRun,
 		Confirmed:     confirm,
@@ -867,23 +1007,7 @@ func envBool(key string, fallback bool) bool {
 }
 
 func errorResult(msg string) *mcp.CallToolResult {
-	payload := map[string]interface{}{
-		"status": "error",
-		"error":  msg,
-		"errors": []map[string]string{
-			{
-				"error_type": "request_error",
-				"message":    msg,
-			},
-		},
-	}
-	text, _ := json.Marshal(payload)
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.TextContent{Type: "text", Text: string(text)},
-		},
-		IsError: true,
-	}
+	return envelopeResult("", "", errorCodeForMessage(msg), msg, false)
 }
 
 func pathErrorResult(err error) *mcp.CallToolResult {
@@ -891,54 +1015,28 @@ func pathErrorResult(err error) *mcp.CallToolResult {
 	if !ok {
 		return errorResult(err.Error())
 	}
-	payload := map[string]interface{}{
-		"status":                  "error",
-		"error":                   pathErr.Error(),
-		"message":                 pathErr.Error(),
-		"error_type":              "path_not_mounted",
-		"requested_path":          pathErr.Path,
-		"resolved_path":           pathErr.Resolved,
-		"field":                   pathErr.Field,
-		"path_maps":               pathErr.Mappings,
-		"recommended_intake_dirs": recommendedIntakeDirs(pathErr.Mappings),
-		"example_paths":           pathExamples(pathErr.Mappings),
-		"errors": []map[string]string{
-			{
-				"error_type": "path_not_mounted",
-				"message":    pathErr.Error(),
-			},
-		},
-	}
+	payload := errorEnvelope("", "", "INVALID_PATH", pathErr.Error(), false)
+	payload["requested_path"] = pathErr.Path
+	payload["resolved_path"] = pathErr.Resolved
+	payload["field"] = pathErr.Field
+	payload["path_maps"] = pathErr.Mappings
+	payload["recommended_intake_dirs"] = recommendedIntakeDirs(pathErr.Mappings)
+	payload["example_paths"] = pathExamples(pathErr.Mappings)
+	payload["next_tool"] = "zeek_list_pcaps"
 	text, _ := json.MarshalIndent(payload, "", "  ")
 	return &mcp.CallToolResult{
+		Result: mcp.Result{Meta: &mcp.Meta{AdditionalFields: map[string]any{"error_code": "INVALID_PATH"}}},
 		Content: []mcp.Content{
 			mcp.TextContent{Type: "text", Text: string(text)},
 		},
-		IsError: true,
+		StructuredContent: payload,
+		IsError:           true,
 	}
 }
 
 func outputErrorResult(err error) *mcp.CallToolResult {
 	msg := err.Error()
-	payload := map[string]interface{}{
-		"status":     "error",
-		"error":      msg,
-		"message":    msg,
-		"error_type": "output_dir_unavailable",
-		"errors": []map[string]string{
-			{
-				"error_type": "output_dir_unavailable",
-				"message":    msg,
-			},
-		},
-	}
-	text, _ := json.MarshalIndent(payload, "", "  ")
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.TextContent{Type: "text", Text: string(text)},
-		},
-		IsError: true,
-	}
+	return envelopeResult("", "", "OUTPUT_DIR_UNAVAILABLE", msg, false)
 }
 
 func pathExamples(maps []PathMap) []string {
@@ -974,24 +1072,136 @@ func recommendedIntakeDirs(maps []PathMap) []string {
 }
 
 func validationErrorResult(msg string) *mcp.CallToolResult {
-	payload := map[string]interface{}{
-		"tool":   "zeek_validate_script",
-		"status": "error",
-		"valid":  false,
-		"error":  msg,
-		"errors": []map[string]string{
-			{
-				"script":     "input",
-				"error_type": "missing_input",
-				"message":    msg,
-			},
-		},
-	}
+	payload := errorEnvelope("zeek_validate_script", "", "MISSING_REQUIRED_PARAM", msg, false)
+	payload["valid"] = false
 	text, _ := json.MarshalIndent(payload, "", "  ")
 	return &mcp.CallToolResult{
+		Result: mcp.Result{Meta: &mcp.Meta{AdditionalFields: map[string]any{"error_code": "MISSING_REQUIRED_PARAM"}}},
 		Content: []mcp.Content{
 			mcp.TextContent{Type: "text", Text: string(text)},
 		},
-		IsError: true,
+		StructuredContent: payload,
+		IsError:           true,
 	}
+}
+
+func errorEnvelope(toolName, traceID, code, message string, retryable bool) map[string]interface{} {
+	payload := map[string]interface{}{
+		"ok":            false,
+		"status":        "semantic_failure",
+		"error_code":    code,
+		"error_message": message,
+		"suggestion":    suggestionForError(code),
+		"retryable":     retryable,
+		"retry_with":    map[string]interface{}{},
+	}
+	if toolName != "" {
+		payload["tool"] = toolName
+	}
+	if traceID != "" {
+		payload["trace_id"] = traceID
+	}
+	if next := nextToolForError(code); next != "" {
+		payload["next_tool"] = next
+	}
+	return payload
+}
+
+func envelopeResult(toolName, traceID, code, message string, retryable bool) *mcp.CallToolResult {
+	payload := errorEnvelope(toolName, traceID, code, message, retryable)
+	text, _ := json.MarshalIndent(payload, "", "  ")
+	metaFields := map[string]any{"error_code": code}
+	if traceID != "" {
+		metaFields["trace_id"] = traceID
+	}
+	return &mcp.CallToolResult{
+		Result:            mcp.Result{Meta: &mcp.Meta{AdditionalFields: metaFields}},
+		Content:           []mcp.Content{mcp.TextContent{Type: "text", Text: string(text)}},
+		StructuredContent: payload,
+		IsError:           true,
+	}
+}
+
+func errorCodeForMessage(msg string) string {
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "pcap_path is required"), strings.Contains(lower, "required"):
+		return "MISSING_REQUIRED_PARAM"
+	case strings.Contains(lower, "path"), strings.Contains(lower, "mount"):
+		return "INVALID_PATH"
+	case strings.Contains(lower, "disabled"):
+		return "DISABLED"
+	default:
+		return "TOOL_ERROR"
+	}
+}
+
+func suggestionForError(code string) string {
+	switch code {
+	case "INVALID_PATH":
+		return "Call zeek_list_pcaps and retry with one of the returned path values, or restart the MCP server with a matching Docker volume and ZEEK_MCP_PATH_MAPS."
+	case "MISSING_REQUIRED_PARAM":
+		return "Check the tool input schema and provide the required field before retrying."
+	case "OUTPUT_DIR_UNAVAILABLE":
+		return "Mount /outputs or pass output_dir under a configured writable path map."
+	case "DISABLED":
+		return "Enable the feature explicitly in the MCP environment before retrying."
+	default:
+		return "Inspect error_message and retry with corrected parameters."
+	}
+}
+
+func nextToolForError(code string) string {
+	switch code {
+	case "INVALID_PATH":
+		return "zeek_list_pcaps"
+	case "OUTPUT_DIR_UNAVAILABLE":
+		return "zeek_health_check"
+	default:
+		return ""
+	}
+}
+
+func errorCodeFromResult(result *mcp.CallToolResult) string {
+	if result == nil || result.Meta == nil || result.Meta.AdditionalFields == nil {
+		return "TOOL_ERROR"
+	}
+	if code, ok := result.Meta.AdditionalFields["error_code"].(string); ok && code != "" {
+		return code
+	}
+	return "TOOL_ERROR"
+}
+
+func attachTraceToErrorResult(result *mcp.CallToolResult, toolName, traceID string) {
+	if result == nil || !result.IsError || len(result.Content) == 0 {
+		return
+	}
+	text, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		return
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(text.Text), &payload); err != nil {
+		return
+	}
+	if _, ok := payload["tool"]; !ok && toolName != "" {
+		payload["tool"] = toolName
+	}
+	payload["trace_id"] = traceID
+	updated, _ := json.MarshalIndent(payload, "", "  ")
+	result.Content[0] = mcp.TextContent{Type: "text", Text: string(updated)}
+	result.StructuredContent = payload
+}
+
+func resultTextBytes(result *mcp.CallToolResult) int {
+	if result == nil {
+		return 0
+	}
+	total := 0
+	for _, content := range result.Content {
+		if text, ok := content.(mcp.TextContent); ok {
+			total += len(text.Text)
+		}
+	}
+	return total
 }

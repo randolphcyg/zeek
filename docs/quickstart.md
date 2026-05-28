@@ -116,7 +116,7 @@ Artifacts are written under:
   manifest.json
 ```
 
-Use `zeek_get_artifact_manifest` when another agent needs to continue from a previous run.
+Use `zeek_get_run_manifest` when another agent needs to continue from a previous run.
 
 ## Troubleshooting
 
@@ -124,4 +124,4 @@ Use `zeek_get_artifact_manifest` when another agent needs to continue from a pre
 - `output_dir_unavailable`: `/outputs` is not mounted or is read-only. Ensure the output volume is writable.
 - `docker: command not found`: install Docker Desktop or Docker Engine.
 - `pull access denied`: confirm the GHCR package is public or that Docker is logged in with access.
-- No protocol metadata from `zeek_inspect_pcap`: the slim image does not include `tshark/capinfos`; Zeek MCP falls back to Zeek logs where possible.
+- No protocol metadata from `zeek_inspect_capture`: the slim image does not include `tshark/capinfos`; Zeek MCP falls back to Zeek logs where possible.
