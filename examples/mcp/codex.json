@@ -1,22 +1,10 @@
 {
   "mcpServers": {
-    "zeek_mcp": {
-      "command": "docker",
+    "zeek": {
+      "command": "/path/to/zeek",
       "args": [
-        "run",
-        "--rm",
-        "-i",
-        "-v",
-        "/Users:/Users:ro",
-        "-v",
-        "/Users/randolph/goodjob/zeek_mcp/outputs:/outputs",
-        "-e",
-        "ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=false",
-        "ghcr.io/randolphcyg/zeek_mcp:latest",
-        "--base-dir",
-        "/app",
-        "--scripts-dir",
-        "/app/scripts"
+        "--base-dir", "/path/to/zeek_project",
+        "--scripts-dir", "/path/to/zeek_project/scripts"
       ]
     }
   }

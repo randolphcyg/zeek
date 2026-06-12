@@ -4,13 +4,11 @@ MCP clients discover these tools through `tools/list`. This page is a human refe
 
 ## Path Rules
 
-Docker runtime can only access mounted paths. With the recommended config:
+With the recommended Docker config (mounting host directories at the same path inside the container), agents can use original host paths directly for any pcap file. The server resolves path mappings through `ZEEK_PATH_MAPS` when configured, and falls back to the `/host` mount prefix when `ZEEK_HOST_MOUNT` is set.
 
-- Use `/pcaps/<file>.pcap` for input captures.
-- Use `/outputs` or omit `output_dir` for artifacts.
-- Host paths under the configured pcap/output directories are translated through `ZEEK_MCP_PATH_MAPS`.
+For restricted environments with explicit path maps, use container paths like `/pcaps/<file>.pcap`.
 
-Unmapped host paths return `path_not_mounted`.
+Unmapped host paths return `INVALID_PATH`.
 
 ## Common Response Fields
 
@@ -25,7 +23,7 @@ Execution tools return:
 - `artifacts`: persisted logs and extracted files.
 - `warnings` and `errors`: execution diagnostics.
 
-## `zeek_health_check`
+## `health_check`
 
 Checks server and Zeek runtime health.
 
@@ -40,7 +38,7 @@ Useful fields:
 - `scripts_loaded`
 - `path_maps`
 
-## `zeek_inspect_capture`
+## `inspect_capture`
 
 Inspects a pcap and suggests bundled detection scripts.
 
@@ -57,9 +55,9 @@ Useful fields:
 - `suggested_scripts`
 - `analysis_status`
 
-## `zeek_list_detection_scripts`
+## `list_scripts`
 
-Lists bundled scripts. Despite the historical tool name, it can list detection, extraction, and utility scripts.
+Lists bundled detection, extraction, and utility scripts.
 
 ```json
 {
@@ -75,7 +73,7 @@ Filters:
 - `name`
 - `enabled_only`
 
-## `zeek_detect_threats`
+## `detect_threats`
 
 Runs detection scripts against one pcap.
 
@@ -119,7 +117,7 @@ Useful fields:
 - `manifest_path`
 - `artifacts`
 
-## `zeek_extract_files`
+## `extract_files`
 
 Runs bundled extraction scripts and stores extracted files under the run directory.
 
@@ -135,7 +133,7 @@ Useful fields:
 - `artifacts` where `kind=extracted_file`
 - `manifest_path`
 
-## `zeek_generate_logs`
+## `generate_logs`
 
 Runs Zeek and returns compact summaries of selected logs.
 
@@ -159,7 +157,7 @@ Useful fields:
 - `log_paths`
 - `artifacts` where `kind=zeek_log`
 
-## `zeek_match_intel`
+## `match_intel`
 
 Runs Zeek Intel matching from inline indicators or an Intel TSV file.
 
@@ -184,7 +182,7 @@ Or:
 }
 ```
 
-## `zeek_run_signature`
+## `run_signature`
 
 Runs Zeek signature content or a mounted signature file.
 
@@ -195,7 +193,7 @@ Runs Zeek signature content or a mounted signature file.
 }
 ```
 
-## `zeek_validate_script`
+## `validate_script`
 
 Validates Zeek script syntax with `zeek --parse-only`.
 
@@ -210,9 +208,9 @@ Other inputs:
 - `script_name`
 - `script_path`
 
-## `zeek_run_custom_script`
+## `run_custom_script`
 
-Runs generated Zeek script content. Disabled unless `ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=true`.
+Runs generated Zeek script content. Disabled unless `ZEEK_ENABLE_CUSTOM_SCRIPT=true`.
 
 ```json
 {
@@ -224,7 +222,7 @@ Runs generated Zeek script content. Disabled unless `ZEEK_MCP_ENABLE_CUSTOM_SCRI
 
 Use only in a sandboxed runtime.
 
-## `zeek_get_detection_script`
+## `get_script`
 
 Returns metadata and optional source for a bundled script.
 
@@ -235,23 +233,7 @@ Returns metadata and optional source for a bundled script.
 }
 ```
 
-## `zeek_reload_scripts`
-
-Reloads script metadata from the script directory.
-
-```json
-{}
-```
-
-## `zeek_get_version`
-
-Returns MCP build metadata and Zeek runtime version.
-
-```json
-{}
-```
-
-## `zeek_get_run_manifest`
+## `get_run_manifest`
 
 Reads a saved artifact manifest for downstream agents.
 
@@ -269,7 +251,7 @@ Or:
 }
 ```
 
-## `zeek_list_runs`
+## `list_runs`
 
 Lists saved analysis runs.
 
@@ -285,7 +267,7 @@ Useful fields:
 - `total_bytes`
 - `runs[].artifact_bytes`
 
-## `zeek_cleanup_runs`
+## `cleanup_runs`
 
 Previews or deletes old artifacts. Defaults to dry-run.
 
@@ -308,7 +290,7 @@ Delete:
 }
 ```
 
-## `zeek_list_pcaps`
+## `list_pcaps`
 
 Lists PCAP files from configured intake directories. Use the returned `path` directly as `pcap_path` in other tools.
 
@@ -322,7 +304,7 @@ Useful fields:
 - `pcaps[].path`
 - `pcaps[].size`
 
-## `zeek_triage_pcap`
+## `triage_pcap`
 
 Runs the recommended Agent workflow in one call: inspect capture metadata, run bundled detections, persist artifacts, and return a compact summary.
 

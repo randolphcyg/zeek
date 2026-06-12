@@ -32,40 +32,7 @@ type Talker struct {
 	BytesSent   int    `json:"bytes_sent"`
 }
 
-type CachedResult struct {
-	PcapHash    string           `json:"pcap_hash"`
-	ScriptsHash string           `json:"scripts_hash"`
-	Result      *ExecutionResult `json:"result"`
-}
 
-type ResultCache struct {
-	cache map[string]*CachedResult
-}
-
-func NewResultCache() *ResultCache {
-	return &ResultCache{
-		cache: make(map[string]*CachedResult),
-	}
-}
-
-func (rc *ResultCache) Get(pcapPath string, scripts []string) *CachedResult {
-	key := rc.cacheKey(pcapPath, scripts)
-	return rc.cache[key]
-}
-
-func (rc *ResultCache) Set(pcapPath string, scripts []string, result *ExecutionResult) {
-	key := rc.cacheKey(pcapPath, scripts)
-	rc.cache[key] = &CachedResult{
-		PcapHash:    pcapPath,
-		ScriptsHash: strings.Join(scripts, ","),
-		Result:      result,
-	}
-}
-
-func (rc *ResultCache) cacheKey(pcapPath string, scripts []string) string {
-	scriptStr := strings.Join(scripts, ",")
-	return fmt.Sprintf("%s::%s", pcapPath, scriptStr)
-}
 
 func GetPcapInfo(pcapPath string) (*PcapInfo, error) {
 	return getPcapInfo(pcapPath, false)
@@ -161,7 +128,7 @@ func getPcapInfo(pcapPath string, zeekFallback bool) (*PcapInfo, error) {
 }
 
 func enrichPcapInfoFromZeek(info *PcapInfo, pcapPath string) {
-	workDir, err := os.MkdirTemp("", "zeek_mcp_inspect_")
+	workDir, err := os.MkdirTemp("", "zeek_inspect_")
 	if err != nil {
 		info.Warnings = append(info.Warnings, fmt.Sprintf("zeek metadata fallback could not create a work directory: %s", err.Error()))
 		return
@@ -174,7 +141,7 @@ func enrichPcapInfoFromZeek(info *PcapInfo, pcapPath string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(envInt("ZEEK_INSPECT_TIMEOUT_SECONDS", 60))*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "zeek", "-C", "-r", pcapPath, localZeekCfg)

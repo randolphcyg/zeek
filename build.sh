@@ -61,7 +61,7 @@ fi
 if [[ $CLEAN == true ]]; then
     echo "Cleaning build artifacts..."
     rm -rf "$OUTPUT_DIR"
-    rm -f zeek_mcp.tar.gz
+    rm -f zeek.tar.gz
     echo "Clean complete!"
     exit 0
 fi
@@ -88,10 +88,10 @@ LDFLAGS="-X main.Version=$VERSION -X main.BuildTime=$BUILD_TIME -X main.GitCommi
 if [[ $BUILD_SERVER == true ]]; then
     echo ""
     echo "Building MCP Server..."
-    CGO_ENABLED=0 go build -v -o "$OUTPUT_DIR/zeek_mcp" \
+    CGO_ENABLED=0 go build -v -trimpath -o "$OUTPUT_DIR/zeek" \
         -ldflags "$LDFLAGS" \
         .
-    echo "MCP Server: $OUTPUT_DIR/zeek_mcp"
+    echo "MCP Server: $OUTPUT_DIR/zeek"
 fi
 
 if [[ $BUILD_DOCKER == true ]]; then
@@ -102,8 +102,8 @@ if [[ $BUILD_DOCKER == true ]]; then
         --build-arg "BUILD_TIME=$BUILD_TIME"
         --build-arg "GIT_COMMIT=$GIT_COMMIT"
         --build-arg "WITH_PCAP_TOOLS=$WITH_PCAP_TOOLS"
-        -t "zeek_mcp:$VERSION"
-        -t "zeek_mcp:latest"
+        -t "zeek:$VERSION"
+        -t "zeek:latest"
     )
     if [[ -n $PLATFORM ]]; then
         DOCKER_BUILD_ARGS+=(--platform "$PLATFORM")
@@ -117,8 +117,8 @@ if [[ $BUILD_DOCKER == true ]]; then
     fi
 
     echo "Saving image to tarball..."
-    docker save zeek_mcp:latest | gzip > zeek_mcp.tar.gz
-    echo "Docker Image: zeek_mcp.tar.gz"
+    docker save zeek:latest | gzip > zeek.tar.gz
+    echo "Docker Image: zeek.tar.gz"
 fi
 
 echo ""

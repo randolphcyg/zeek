@@ -26,7 +26,7 @@ func (h *Handler) registerResources(s *server.MCPServer) {
 	s.AddResource(
 		mcp.NewResource("zeek://scripts/detections", "Detection Scripts",
 			mcp.WithMIMEType("application/json"),
-			mcp.WithResourceDescription("Enabled Zeek detection scripts that can be passed to zeek_detect_threats.")),
+			mcp.WithResourceDescription("Enabled Zeek detection scripts that can be passed to detect_threats.")),
 		func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 			resp := map[string]interface{}{
 				"scripts": h.registry.ListScripts(ListScriptsRequest{Type: ScriptTypeDetection, EnabledOnly: true}),

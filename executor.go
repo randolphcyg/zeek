@@ -13,11 +13,6 @@ import (
 	"time"
 )
 
-const (
-	defaultZeekTimeout = 120 * time.Second
-	defaultZeekBinary  = "zeek"
-)
-
 type ExecutorConfig struct {
 	ZeekBinary string
 	Timeout    time.Duration
@@ -107,18 +102,26 @@ type Executor struct {
 
 func NewExecutor(config ExecutorConfig) *Executor {
 	if config.ZeekBinary == "" {
-		config.ZeekBinary = defaultZeekBinary
+		config.ZeekBinary = envOrDefault("ZEEK_BINARY", "zeek")
 	}
 	if config.Timeout == 0 {
-		config.Timeout = defaultZeekTimeout
+		config.Timeout = time.Duration(envInt("ZEEK_TIMEOUT_SECONDS", 120)) * time.Second
 	}
 	return &Executor{config: config}
+}
+
+// WithTimeout returns a copy of the Executor with a different timeout.
+func (e *Executor) WithTimeout(timeout time.Duration) *Executor {
+	return &Executor{config: ExecutorConfig{
+		ZeekBinary: e.config.ZeekBinary,
+		Timeout:    timeout,
+	}}
 }
 
 func (e *Executor) RunDetection(ctx context.Context, pcapPath string, scripts []string, extractDir string, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:     "zeek_detect_threats",
+		Tool:     "detect_threats",
 		PcapPath: pcapPath,
 		Status:   "completed",
 		Alerts:   []StandardAlert{},
@@ -139,7 +142,7 @@ func (e *Executor) RunDetection(ctx context.Context, pcapPath string, scripts []
 func (e *Executor) GenerateLogs(ctx context.Context, pcapPath string, logs []string, maxRecords int, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:         "zeek_generate_logs",
+		Tool:         "generate_logs",
 		PcapPath:     pcapPath,
 		Status:       "completed",
 		Alerts:       []StandardAlert{},
@@ -167,7 +170,7 @@ func (e *Executor) GenerateLogs(ctx context.Context, pcapPath string, logs []str
 func (e *Executor) RunCustomScript(ctx context.Context, pcapPath, scriptContent string, timeout time.Duration, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:     "zeek_run_custom_script",
+		Tool:     "run_custom_script",
 		PcapPath: pcapPath,
 		Status:   "completed",
 		Alerts:   []StandardAlert{},
@@ -202,8 +205,7 @@ func (e *Executor) RunCustomScript(ctx context.Context, pcapPath, scriptContent 
 	if timeout <= 0 {
 		timeout = e.config.Timeout
 	}
-	customExecutor := *e
-	customExecutor.config.Timeout = timeout
+	customExecutor := e.WithTimeout(timeout)
 	run := customExecutor.runZeek(ctx, pcapPath, []string{scriptPath}, "", nil, nil, retainWorkDir())
 	defer run.cleanup()
 	customExecutor.applyRunResult(result, run, startTime, []string{scriptPath}, "")
@@ -212,7 +214,7 @@ func (e *Executor) RunCustomScript(ctx context.Context, pcapPath, scriptContent 
 	if logDir == "" {
 		logDir = run.WorkDir
 	}
-	result.LogSummaries = customExecutor.summarizeLogs(logDir, defaultLogNames(), 10)
+	result.LogSummaries = customExecutor.summarizeLogs(logDir, defaultLogNames(), envInt("ZEEK_MAX_LOG_RECORDS", 10))
 	result.Statistics.TotalAlerts = len(result.Alerts)
 	result.Statistics.TotalLogs = len(result.LogSummaries)
 	return result
@@ -221,7 +223,7 @@ func (e *Executor) RunCustomScript(ctx context.Context, pcapPath, scriptContent 
 func (e *Executor) RunSignature(ctx context.Context, pcapPath, signaturePath string, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:         "zeek_run_signature",
+		Tool:         "run_signature",
 		PcapPath:     pcapPath,
 		Status:       "completed",
 		Alerts:       []StandardAlert{},
@@ -311,7 +313,7 @@ func (e *Executor) runZeek(ctx context.Context, pcapPath string, scripts []strin
 		return run
 	}
 
-	workDir, err := os.MkdirTemp("", "zeek_mcp_")
+	workDir, err := os.MkdirTemp("", "zeek_")
 	if err != nil {
 		run.Err = err
 		return run
@@ -431,13 +433,17 @@ func (e *Executor) writeLocalConfig(cfgPath, extractDir string) {
 	lines = append(lines, `redef LogAscii::use_json = T;`)
 	lines = append(lines, `redef Log::default_rotation_interval = 0 secs;`)
 	if extractDir != "" {
-		lines = append(lines, fmt.Sprintf(`redef FileExtract::prefix = "%s";`, extractDir))
+		// Escape backslashes for Zeek string literals.
+		escaped := strings.ReplaceAll(extractDir, `\`, `\\`)
+		lines = append(lines, fmt.Sprintf(`redef FileExtract::prefix = "%s";`, escaped))
 	}
 	_ = os.WriteFile(cfgPath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }
 
 func (e *Executor) parseOnly(ctx context.Context, inputPath string) string {
-	cmd := exec.CommandContext(ctx, e.config.ZeekBinary, "--parse-only", inputPath)
+	parseCtx, cancel := context.WithTimeout(ctx, time.Duration(envInt("ZEEK_PARSE_TIMEOUT_SECONDS", 30))*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(parseCtx, e.config.ZeekBinary, "--parse-only", inputPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return strings.TrimSpace(string(output))
@@ -734,7 +740,15 @@ func (e *Executor) parseZeekDiagnostics(stderr string) ([]ExecutionError, []stri
 }
 
 func retainWorkDir() bool {
-	return strings.EqualFold(os.Getenv("ZEEK_MCP_RETAIN_WORKDIR"), "true")
+	return strings.EqualFold(os.Getenv("ZEEK_RETAIN_WORKDIR"), "true")
+}
+
+func envOrDefault(key, fallback string) string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	return raw
 }
 
 func defaultLogNames() []string {
@@ -761,7 +775,10 @@ func writeTempFile(pattern, content string) (string, func(), error) {
 }
 
 func validateCustomScriptSafety(scriptContent string) []string {
-	lower := strings.ToLower(scriptContent)
+	// Strip comments before checking to prevent bypass via commented-out code.
+	cleaned := stripZeekComments(scriptContent)
+	lower := strings.ToLower(cleaned)
+
 	blocked := map[string]string{
 		"system(":                       "system command execution is not allowed",
 		"exec::":                        "Exec framework usage is not allowed",
@@ -780,4 +797,22 @@ func validateCustomScriptSafety(scriptContent string) []string {
 	}
 	sort.Strings(problems)
 	return problems
+}
+
+// stripZeekComments removes Zeek comments (# to end of line) from script content.
+func stripZeekComments(content string) string {
+	lines := strings.Split(content, "\n")
+	var result []string
+	for _, line := range lines {
+		// Find the first # outside of a string literal (simple heuristic).
+		idx := strings.Index(line, "#")
+		if idx >= 0 {
+			line = line[:idx]
+		}
+		line = strings.TrimSpace(line)
+		if line != "" {
+			result = append(result, line)
+		}
+	}
+	return strings.Join(result, "\n")
 }

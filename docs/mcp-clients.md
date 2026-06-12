@@ -8,10 +8,10 @@ Create an output directory for analysis artifacts:
 
 ```bash
 # macOS / Linux
-mkdir -p ~/zeek_mcp_outputs
+mkdir -p ~/zeek_outputs
 
 # Windows (PowerShell)
-mkdir "$env:USERPROFILE\zeek_mcp_outputs"
+mkdir "$env:USERPROFILE\zeek_outputs"
 ```
 
 ## Platform Configuration
@@ -21,16 +21,16 @@ mkdir "$env:USERPROFILE\zeek_mcp_outputs"
 ```json
 {
   "mcpServers": {
-    "zeek_mcp": {
+    "zeek": {
       "command": "docker",
       "args": [
         "run",
         "--rm",
         "-i",
         "-v", "/Users:/Users:ro",
-        "-v", "/Users/yourname/zeek_mcp_outputs:/outputs",
-        "-e", "ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=false",
-        "ghcr.io/randolphcyg/zeek_mcp:latest",
+        "-v", "/Users/yourname/zeek_outputs:/outputs",
+        "-e", "ZEEK_ENABLE_CUSTOM_SCRIPT=false",
+        "ghcr.io/randolphcyg/zeek:latest",
         "--base-dir", "/app",
         "--scripts-dir", "/app/scripts"
       ]
@@ -46,7 +46,7 @@ macOS 上所有用户文件都在 `/Users` 下，一个挂载覆盖所有 pcap �
 ```json
 {
   "mcpServers": {
-    "zeek_mcp": {
+    "zeek": {
       "command": "docker",
       "args": [
         "run",
@@ -54,9 +54,9 @@ macOS 上所有用户文件都在 `/Users` 下，一个挂载覆盖所有 pcap �
         "-i",
         "-v", "/home:/home:ro",
         "-v", "/tmp:/tmp:ro",
-        "-v", "/home/yourname/zeek_mcp_outputs:/outputs",
-        "-e", "ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=false",
-        "ghcr.io/randolphcyg/zeek_mcp:latest",
+        "-v", "/home/yourname/zeek_outputs:/outputs",
+        "-e", "ZEEK_ENABLE_CUSTOM_SCRIPT=false",
+        "ghcr.io/randolphcyg/zeek:latest",
         "--base-dir", "/app",
         "--scripts-dir", "/app/scripts"
       ]
@@ -74,22 +74,22 @@ macOS 上所有用户文件都在 `/Users` 下，一个挂载覆盖所有 pcap �
 
 ### Windows (Docker Desktop)
 
-Windows 上 Docker Desktop 使用 WSL2 后端，宿主机磁盘自动映射到 `/mnt/` 路径下。需要配合 `ZEEK_MCP_PATH_MAPS` 做 Windows 路径到 Linux 路径的转换：
+Windows 上 Docker Desktop 使用 WSL2 后端，宿主机磁盘自动映射到 `/mnt/` 路径下。需要配合 `ZEEK_PATH_MAPS` 做 Windows 路径到 Linux 路径的转换：
 
 ```json
 {
   "mcpServers": {
-    "zeek_mcp": {
+    "zeek": {
       "command": "docker",
       "args": [
         "run",
         "--rm",
         "-i",
         "-v", "C:\\Users:/Users:ro",
-        "-v", "C:\\Users\\yourname\\zeek_mcp_outputs:/outputs",
-        "-e", "ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=false",
-        "-e", "ZEEK_MCP_PATH_MAPS=C:\\Users=/Users,C:/Users=/Users",
-        "ghcr.io/randolphcyg/zeek_mcp:latest",
+        "-v", "C:\\Users\\yourname\\zeek_outputs:/outputs",
+        "-e", "ZEEK_ENABLE_CUSTOM_SCRIPT=false",
+        "-e", "ZEEK_PATH_MAPS=C:\\Users=/Users,C:/Users=/Users",
+        "ghcr.io/randolphcyg/zeek:latest",
         "--base-dir", "/app",
         "--scripts-dir", "/app/scripts"
       ]
@@ -110,7 +110,7 @@ Windows 上 Docker Desktop 使用 WSL2 后端，宿主机磁盘自动映射到 `
 
 ```json
 "-v", "D:\\data:/data:ro",
-"-e", "ZEEK_MCP_PATH_MAPS=C:\\Users=/Users,C:/Users=/Users,D:\\data=/data,D:/data=/data"
+"-e", "ZEEK_PATH_MAPS=C:\\Users=/Users,C:/Users=/Users,D:\\data=/data,D:/data=/data"
 ```
 
 ## 原理
@@ -125,7 +125,7 @@ Windows 上 Docker Desktop 使用 WSL2 后端，宿主机磁盘自动映射到 `
 
 - 只读挂载（`:ro`）确保容器无法修改宿主机文件
 - `/outputs` 挂载为可写，用于存储分析产物
-- macOS/Linux 不需要 `ZEEK_MCP_PATH_MAPS`，路径在容器内外完全一致
+- macOS/Linux 不需要 `ZEEK_PATH_MAPS`，路径在容器内外完全一致
 - Windows 需要 path map 做 `C:\` → `/` 的前缀转换
 
 ## Client-Specific Notes
@@ -182,7 +182,7 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
   manifest.json  # Run metadata and artifact index
 ```
 
-使用 `zeek_get_run_manifest` 和 `zeek_list_runs` 访问历史分析结果。
+使用 `get_run_manifest` 和 `list_runs` 访问历史分析结果。
 
 ## Build Options
 
@@ -199,7 +199,7 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 
 ## Native Binary Mode
 
-如果宿主机已安装 Zeek，可以直接运行 `zeek_mcp` 二进制。此模式下任意文件系统路径均可访问，零配置：
+如果宿主机已安装 Zeek，可以直接运行 `zeek` 二进制。此模式下任意文件系统路径均可访问，零配置：
 
 ```bash
 ./build.sh -s
@@ -208,11 +208,11 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 ```json
 {
   "mcpServers": {
-    "zeek_mcp": {
-      "command": "/path/to/zeek_mcp",
+    "zeek": {
+      "command": "/path/to/zeek",
       "args": [
-        "--base-dir", "/path/to/zeek_mcp_project",
-        "--scripts-dir", "/path/to/zeek_mcp_project/scripts"
+        "--base-dir", "/path/to/zeek_project",
+        "--scripts-dir", "/path/to/zeek_project/scripts"
       ]
     }
   }
@@ -224,7 +224,7 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 ```json
 {
   "env": {
-    "ZEEK_MCP_ENABLE_CUSTOM_SCRIPT": "true"
+    "ZEEK_ENABLE_CUSTOM_SCRIPT": "true"
   }
 }
 ```
@@ -236,15 +236,15 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 ```json
 {
   "mcpServers": {
-    "zeek_mcp": {
+    "zeek": {
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
         "-v", "/path/to/pcaps:/pcaps:ro",
         "-v", "/path/to/outputs:/outputs",
-        "-e", "ZEEK_MCP_PATH_MAPS=/path/to/pcaps=/pcaps,/path/to/outputs=/outputs",
-        "-e", "ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=false",
-        "ghcr.io/randolphcyg/zeek_mcp:latest",
+        "-e", "ZEEK_PATH_MAPS=/path/to/pcaps=/pcaps,/path/to/outputs=/outputs",
+        "-e", "ZEEK_ENABLE_CUSTOM_SCRIPT=false",
+        "ghcr.io/randolphcyg/zeek:latest",
         "--base-dir", "/app",
         "--scripts-dir", "/app/scripts"
       ]

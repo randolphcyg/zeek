@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -23,7 +24,6 @@ type MCPServer struct {
 	server   *server.MCPServer
 	registry *ScriptRegistry
 	executor *Executor
-	cache    *ResultCache
 	baseDir  string
 	paths    *PathResolver
 }
@@ -41,14 +41,13 @@ func NewMCPServer(baseDir, scriptsDir string, pathMaps []PathMap) *MCPServer {
 	handler := &Handler{
 		registry: registry,
 		executor: executor,
-		cache:    NewResultCache(),
 		baseDir:  baseDir,
 		paths:    NewPathResolver(pathMaps),
 	}
 	handler.cleanupArtifactsOnStart()
 
 	s := server.NewMCPServer(
-		"zeek_mcp",
+		"zeek",
 		Version,
 		server.WithToolCapabilities(true),
 		server.WithLogging(),
@@ -64,7 +63,6 @@ func NewMCPServer(baseDir, scriptsDir string, pathMaps []PathMap) *MCPServer {
 		server:   s,
 		registry: registry,
 		executor: executor,
-		cache:    handler.cache,
 		baseDir:  baseDir,
 		paths:    handler.paths,
 	}
@@ -102,41 +100,37 @@ func (h *Handler) dispatchTool(ctx context.Context, request mcp.CallToolRequest)
 
 func (h *Handler) dispatchToolInner(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	switch request.Params.Name {
-	case "zeek_list_detection_scripts":
+	case "list_scripts":
 		return h.handleListScripts(ctx, request)
-	case "zeek_inspect_capture":
+	case "inspect_capture":
 		return h.handleGetPcapInfo(ctx, request)
-	case "zeek_detect_threats":
+	case "detect_threats":
 		return h.handleRunDetection(ctx, request)
-	case "zeek_extract_files":
+	case "extract_files":
 		return h.handleExtractFiles(ctx, request)
-	case "zeek_get_detection_script":
+	case "get_script":
 		return h.handleGetScriptDetail(ctx, request)
-	case "zeek_health_check":
+	case "health_check":
 		return h.handleHealthCheck(ctx, request)
-	case "zeek_validate_script":
+	case "validate_script":
 		return h.handleSyntaxCheck(ctx, request)
-	case "zeek_get_version":
-		return h.handleZeekVersion(ctx, request)
-	case "zeek_reload_scripts":
-		return h.handleReloadScripts(ctx, request)
-	case "zeek_run_custom_script":
+	case "run_custom_script":
 		return h.handleRunCustomScript(ctx, request)
-	case "zeek_generate_logs":
+	case "generate_logs":
 		return h.handleGenerateLogs(ctx, request)
-	case "zeek_match_intel":
+	case "match_intel":
 		return h.handleRunIntelMatch(ctx, request)
-	case "zeek_run_signature":
+	case "run_signature":
 		return h.handleRunSignature(ctx, request)
-	case "zeek_get_run_manifest":
+	case "get_run_manifest":
 		return h.handleGetArtifactManifest(ctx, request)
-	case "zeek_list_runs":
+	case "list_runs":
 		return h.handleListAnalysisRuns(ctx, request)
-	case "zeek_cleanup_runs":
+	case "cleanup_runs":
 		return h.handleCleanupAnalysisRuns(ctx, request)
-	case "zeek_list_pcaps":
+	case "list_pcaps":
 		return h.handleListPcaps(ctx, request)
-	case "zeek_triage_pcap":
+	case "triage_pcap":
 		return h.handleTriagePcap(ctx, request)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", request.Params.Name)), nil
@@ -178,17 +172,54 @@ func writeToolCallLog(toolName, traceID string, input any, status, errorCode str
 	_, _ = f.Write(append(data, '\n'))
 }
 
-func (ms *MCPServer) Run() error {
+func (ms *MCPServer) logStartup(transport string) {
 	log.Printf("INFO: Zeek MCP Server v%s starting", Version)
+	log.Printf("INFO: Transport: %s", transport)
 	log.Printf("INFO: Scripts loaded: %d", len(ms.registry.ListScripts(ListScriptsRequest{})))
 	log.Printf("INFO: Path maps configured: %d", len(ms.paths.Mappings()))
 	log.Printf("INFO: Git commit: %s, Build time: %s", GitCommit, BuildTime)
+}
 
+func (ms *MCPServer) Run() error {
+	return ms.RunStdio()
+}
+
+func (ms *MCPServer) RunStdio() error {
+	ms.logStartup("stdio")
 	return server.ServeStdio(ms.server)
 }
 
+func (ms *MCPServer) RunHTTP(addr, endpoint, tlsCert, tlsKey string) error {
+	ms.logStartup("streamable_http")
+	if endpoint == "" {
+		endpoint = "/mcp"
+	}
+	httpServer := server.NewStreamableHTTPServer(
+		ms.server,
+		server.WithEndpointPath(endpoint),
+	)
+	mux := http.NewServeMux()
+	mux.Handle(endpoint, httpServer)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","service":"zeek"}`))
+	})
+
+	useTLS := tlsCert != "" && tlsKey != ""
+	if useTLS {
+		log.Printf("INFO: HTTPS MCP endpoint listening on %s%s", addr, endpoint)
+	} else {
+		log.Printf("INFO: HTTP MCP endpoint listening on %s%s", addr, endpoint)
+	}
+
+	if useTLS {
+		return http.ListenAndServeTLS(addr, tlsCert, tlsKey, mux)
+	}
+	return http.ListenAndServe(addr, mux)
+}
+
 func (h *Handler) cleanupArtifactsOnStart() {
-	if !envBool("ZEEK_MCP_ARTIFACT_CLEANUP_ON_START", false) {
+	if !envBool("ZEEK_ARTIFACT_CLEANUP_ON_START", false) {
 		return
 	}
 	root, err := h.resolveOutputRoot(map[string]interface{}{})
@@ -196,8 +227,8 @@ func (h *Handler) cleanupArtifactsOnStart() {
 		log.Printf("WARN: artifact cleanup on start skipped: %v", err)
 		return
 	}
-	retentionDays := envInt("ZEEK_MCP_ARTIFACT_RETENTION_DAYS", 0)
-	maxBytes := int64(envInt("ZEEK_MCP_ARTIFACT_MAX_BYTES", 0))
+	retentionDays := envInt("ZEEK_ARTIFACT_RETENTION_DAYS", 0)
+	maxBytes := int64(envInt("ZEEK_ARTIFACT_MAX_BYTES", 0))
 	if retentionDays <= 0 && maxBytes <= 0 {
 		log.Printf("INFO: artifact cleanup on start skipped: no TTL or max bytes configured")
 		return

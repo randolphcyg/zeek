@@ -1,7 +1,7 @@
 # Build outputs
 /bin/
-/zeek_mcp
-/zeek_mcp.tar.gz
+zeek
+zeek.tar.gz
 /*.tar.gz
 
 # Zeek runtime outputs
@@ -9,7 +9,6 @@
 /*.log.gz
 /*_extracted/
 /extract_files/
-/zeek_mcp_*/
 /outputs/
 
 # Packet captures and local samples

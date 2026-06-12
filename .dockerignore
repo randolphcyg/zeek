@@ -2,8 +2,8 @@
 .idea/
 .vscode/
 bin/
-zeek_mcp
-zeek_mcp.tar.gz
+zeek
+zeek.tar.gz
 *.tar.gz
 outputs/
 *_extracted/
@@ -15,4 +15,6 @@ extract_files/
 samples/
 captures/
 pcaps/
+.cache/
+tmp/
 .DS_Store

@@ -13,8 +13,8 @@ import (
 )
 
 func (h *Handler) handleRunCustomScript(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if !strings.EqualFold(os.Getenv("ZEEK_MCP_ENABLE_CUSTOM_SCRIPT"), "true") {
-		return errorResult("zeek_run_custom_script is disabled; set ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=true to enable it"), nil
+	if !strings.EqualFold(os.Getenv("ZEEK_ENABLE_CUSTOM_SCRIPT"), "true") {
+		return errorResult("run_custom_script is disabled; set ZEEK_ENABLE_CUSTOM_SCRIPT=true to enable it"), nil
 	}
 
 	args := getArgs(request)
@@ -61,7 +61,7 @@ func (h *Handler) handleGenerateLogs(ctx context.Context, request mcp.CallToolRe
 	}
 
 	logs := stringSliceArg(args["logs"])
-	maxRecords := 20
+	maxRecords := envInt("ZEEK_MAX_LOG_RECORDS", 20)
 	if raw, ok := args["max_records"].(float64); ok && raw > 0 {
 		maxRecords = int(raw)
 	}
@@ -104,7 +104,7 @@ func (h *Handler) handleRunIntelMatch(ctx context.Context, request mcp.CallToolR
 			return errorResult("indicators or intel_file is required"), nil
 		}
 		var err error
-		intelFile, cleanupIntel, err = writeTempFile("zeek_mcp_intel_*.tsv", content)
+		intelFile, cleanupIntel, err = writeTempFile("zeek_intel_*.tsv", content)
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to create Intel file: %s", err.Error())), nil
 		}
@@ -118,7 +118,7 @@ func (h *Handler) handleRunIntelMatch(ctx context.Context, request mcp.CallToolR
 redef Intel::read_files += { "%s" };
 `, escapeZeekString(intelFile))
 
-	scriptPath, cleanupScript, err := writeTempFile("zeek_mcp_intel_*.zeek", scriptContent)
+	scriptPath, cleanupScript, err := writeTempFile("zeek_intel_*.zeek", scriptContent)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to create Intel script: %s", err.Error())), nil
 	}
@@ -129,7 +129,7 @@ redef Intel::read_files += { "%s" };
 		return outputErrorResult(err), nil
 	}
 
-	result := h.executor.RunScriptsWithLogSummary(ctx, "zeek_match_intel", pcapResolution.Resolved, []string{scriptPath}, []string{"intel", "notice", "conn", "dns", "http", "files"}, 50, artifactRun)
+	result := h.executor.RunScriptsWithLogSummary(ctx, "match_intel", pcapResolution.Resolved, []string{scriptPath}, []string{"intel", "notice", "conn", "dns", "http", "files"}, envInt("ZEEK_MAX_LOG_RECORDS", 50), artifactRun)
 	result.PcapPath = pcapPath
 	result.RequestedPath = pcapResolution.Requested
 	result.ResolvedPath = pcapResolution.Resolved
@@ -153,7 +153,7 @@ func (h *Handler) handleRunSignature(ctx context.Context, request mcp.CallToolRe
 	var cleanup func()
 	if signaturePath == "" && signatureContent != "" {
 		var err error
-		signaturePath, cleanup, err = writeTempFile("zeek_mcp_signature_*.sig", signatureContent)
+		signaturePath, cleanup, err = writeTempFile("zeek_signature_*.sig", signatureContent)
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to create signature file: %s", err.Error())), nil
 		}
@@ -218,7 +218,7 @@ func buildIntelTSV(raw interface{}) string {
 	lines = append(lines, "#fields\tindicator\tindicator_type\tmeta.source\tmeta.desc")
 	addIntelLines := func(key, intelType string) {
 		for _, value := range stringSliceArg(indicators[key]) {
-			lines = append(lines, fmt.Sprintf("%s\t%s\tzeek_mcp\tuser supplied indicator", value, intelType))
+			lines = append(lines, fmt.Sprintf("%s\t%s\tzeek\tuser supplied indicator", value, intelType))
 		}
 	}
 	addIntelLines("ips", "Intel::ADDR")

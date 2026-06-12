@@ -73,7 +73,7 @@ func (r *PathResolver) ResolveExisting(field, requested string) (PathResolution,
 		return resolution, nil
 	}
 	// When no path maps are configured, accept any absolute path that exists
-	// on the filesystem (same behavior as gowireshark-cli without GOWIRESHARK_PCAP_DIR).
+	// on the filesystem (same behavior as epan without GOWIRESHARK_PCAP_DIR).
 	if len(r.maps) == 0 && filepath.IsAbs(requested) {
 		absPath := filepath.Clean(requested)
 		if _, err := os.Stat(absPath); err == nil {
@@ -83,9 +83,9 @@ func (r *PathResolver) ResolveExisting(field, requested string) (PathResolution,
 	// Fallback: try host mount prefix for container environments.
 	// When the host filesystem is bind-mounted into the container (e.g. -v /:/host:ro),
 	// users can reference any absolute host path without explicit path-map configuration.
-	// The mount point defaults to /host but can be overridden via ZEEK_MCP_HOST_MOUNT.
+	// The mount point defaults to /host but can be overridden via ZEEK_HOST_MOUNT.
 	if filepath.IsAbs(requested) {
-		hostMount := os.Getenv("ZEEK_MCP_HOST_MOUNT")
+		hostMount := os.Getenv("ZEEK_HOST_MOUNT")
 		if hostMount == "" {
 			hostMount = "/host"
 		}

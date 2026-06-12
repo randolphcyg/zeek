@@ -18,7 +18,6 @@ import (
 type Handler struct {
 	registry *ScriptRegistry
 	executor *Executor
-	cache    *ResultCache
 	baseDir  string
 	paths    *PathResolver
 }
@@ -85,7 +84,7 @@ func (h *Handler) handleListScripts(ctx context.Context, request mcp.CallToolReq
 	}
 
 	result := map[string]interface{}{
-		"tool":    "zeek_list_detection_scripts",
+		"tool":    "list_scripts",
 		"total":   len(items),
 		"scripts": items,
 	}
@@ -117,7 +116,7 @@ func (h *Handler) handleGetPcapInfo(ctx context.Context, request mcp.CallToolReq
 	suggestion := h.generateScriptSuggestions(info)
 
 	resp := map[string]interface{}{
-		"tool":              "zeek_inspect_capture",
+		"tool":              "inspect_capture",
 		"pcap_path":         pcapPath,
 		"requested_path":    pcapResolution.Requested,
 		"resolved_path":     pcapResolution.Resolved,
@@ -208,18 +207,11 @@ func (h *Handler) handleRunDetection(ctx context.Context, request mcp.CallToolRe
 	if len(scriptNames) > 0 && len(scriptPaths) == 0 {
 		return errorResult("no matching enabled detection scripts found"), nil
 	}
-	cacheScripts := append([]string{}, scriptNames...)
-	if len(cacheScripts) == 0 {
-		cacheScripts = []string{"__all_detection_scripts"}
-	}
 
 	if extractFiles {
 		extractionPaths := h.registry.GetScriptPaths(nil, ScriptTypeExtraction)
 		scriptPaths = append(scriptPaths, extractionPaths...)
-		cacheScripts = append(cacheScripts, "__extract_files")
 	}
-
-	_ = cacheScripts
 
 	artifactRun, err := h.prepareArtifactRun(args)
 	if err != nil {
@@ -267,7 +259,7 @@ func (h *Handler) handleExtractFiles(ctx context.Context, request mcp.CallToolRe
 	extractDir := artifactRun.ExtractedDir
 
 	result := h.executor.RunDetection(ctx, pcapResolution.Resolved, extractScriptPaths, extractDir, artifactRun)
-	result.Tool = "zeek_extract_files"
+	result.Tool = "extract_files"
 	result.PcapPath = pcapPath
 	result.RequestedPath = pcapResolution.Requested
 	result.ResolvedPath = pcapResolution.Resolved
@@ -294,7 +286,7 @@ func (h *Handler) handleGetScriptDetail(ctx context.Context, request mcp.CallToo
 	}
 
 	resp := map[string]interface{}{
-		"tool":         "zeek_get_detection_script",
+		"tool":         "get_script",
 		"name":         meta.Name,
 		"script_id":    meta.ScriptID,
 		"type":         meta.Type,
@@ -332,9 +324,10 @@ func (h *Handler) handleHealthCheck(ctx context.Context, request mcp.CallToolReq
 	compatibility, versionWarnings := zeekCompatibility(runtimeVersion)
 
 	resp := map[string]interface{}{
-		"tool":               "zeek_health_check",
+		"tool":               "health_check",
 		"status":             "healthy",
 		"version":            Version,
+		"mcp_version":        Version,
 		"target_zeek_lts":    TargetZeekLTS,
 		"runtime_zeek":       runtimeVersion,
 		"zeek_compatibility": compatibility,
@@ -409,7 +402,7 @@ func (h *Handler) handleSyntaxCheck(ctx context.Context, request mcp.CallToolReq
 	}
 
 	resp := map[string]interface{}{
-		"tool":  "zeek_validate_script",
+		"tool":  "validate_script",
 		"valid": true,
 	}
 	if inputPath != "" {
@@ -424,30 +417,6 @@ func (h *Handler) handleSyntaxCheck(ctx context.Context, request mcp.CallToolReq
 	}, nil
 }
 
-func (h *Handler) handleZeekVersion(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	runtimeVersion, err := getZeekVersion(ctx)
-	compatibility, warnings := zeekCompatibility(runtimeVersion)
-
-	resp := map[string]interface{}{
-		"tool":               "zeek_get_version",
-		"mcp_version":        Version,
-		"target_zeek_lts":    TargetZeekLTS,
-		"zeek_compatibility": compatibility,
-		"warnings":           warnings,
-	}
-	if err != nil {
-		resp["error"] = fmt.Sprintf("failed to get zeek version: %s", err.Error())
-	} else {
-		resp["version"] = runtimeVersion
-	}
-
-	text, _ := json.MarshalIndent(resp, "", "  ")
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.TextContent{Type: "text", Text: string(text)},
-		},
-	}, nil
-}
 
 func getZeekVersion(ctx context.Context) (string, error) {
 	cmd := exec.CommandContext(ctx, "zeek", "--version")
@@ -474,27 +443,6 @@ func zeekCompatibility(runtimeVersion string) (string, []string) {
 	}
 }
 
-func (h *Handler) handleReloadScripts(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	result, err := h.registry.Reload()
-	if err != nil {
-		return errorResult(fmt.Sprintf("reload failed: %s", err.Error())), nil
-	}
-
-	resp := map[string]interface{}{
-		"tool":    "zeek_reload_scripts",
-		"status":  "reloaded",
-		"total":   result.Total,
-		"valid":   result.Valid,
-		"invalid": result.Invalid,
-	}
-
-	text, _ := json.MarshalIndent(resp, "", "  ")
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.TextContent{Type: "text", Text: string(text)},
-		},
-	}, nil
-}
 
 func (h *Handler) prepareArtifactRun(args map[string]interface{}) (*ArtifactRun, error) {
 	outputRoot, err := h.resolveOutputRoot(args)
@@ -516,7 +464,7 @@ func (h *Handler) resolveOutputRoot(args map[string]interface{}) (string, error)
 		return "/outputs", nil
 	}
 	// Fallback: use <baseDir>/outputs when no explicit output mount exists
-	// (e.g. running locally without Docker). Similar to gowireshark-cli's
+	// (e.g. running locally without Docker). Similar to epan's
 	// default of using GOWIRESHARK_OUTPUT_DIR or os.TempDir().
 	if h.baseDir != "" {
 		localOutputs := filepath.Join(h.baseDir, "outputs")
@@ -532,7 +480,7 @@ func dirWritable(dir string) bool {
 	if err != nil || !info.IsDir() {
 		return false
 	}
-	tmp, err := os.CreateTemp(dir, ".zeek_mcp_write_test_*")
+	tmp, err := os.CreateTemp(dir, ".zeek_write_test_*")
 	if err != nil {
 		return false
 	}
@@ -605,7 +553,7 @@ func (h *Handler) handleGetArtifactManifest(ctx context.Context, request mcp.Cal
 		return errorResult(fmt.Sprintf("failed to read artifact manifest: %s", err.Error())), nil
 	}
 	resp := map[string]interface{}{
-		"tool":           "zeek_get_run_manifest",
+		"tool":           "get_run_manifest",
 		"requested_path": resolution.Requested,
 		"resolved_path":  resolution.Resolved,
 		"manifest":       manifest,
@@ -628,7 +576,7 @@ func (h *Handler) handleListAnalysisRuns(ctx context.Context, request mcp.CallTo
 	entries, err := os.ReadDir(runsRoot)
 	if err != nil {
 		resp := map[string]interface{}{
-			"tool":        "zeek_list_runs",
+			"tool":        "list_runs",
 			"output_dir":  root,
 			"total":       0,
 			"total_bytes": int64(0),
@@ -668,7 +616,7 @@ func (h *Handler) handleListAnalysisRuns(ctx context.Context, request mcp.CallTo
 		summaries = summaries[:limit]
 	}
 	resp := map[string]interface{}{
-		"tool":        "zeek_list_runs",
+		"tool":        "list_runs",
 		"output_dir":  root,
 		"total":       len(summaries),
 		"total_bytes": totalAnalysisRunBytes(summaries),
@@ -724,7 +672,7 @@ func (h *Handler) handleListPcaps(ctx context.Context, request mcp.CallToolReque
 		pcaps = append(pcaps, items...)
 	}
 	resp := map[string]interface{}{
-		"tool":        "zeek_list_pcaps",
+		"tool":        "list_pcaps",
 		"directories": dirs,
 		"total":       len(pcaps),
 		"pcaps":       pcaps,
@@ -763,14 +711,14 @@ func (h *Handler) handleTriagePcap(ctx context.Context, request mcp.CallToolRequ
 		return outputErrorResult(err), nil
 	}
 	result := h.executor.RunDetection(ctx, pcapResolution.Resolved, scriptPaths, "", artifactRun)
-	result.Tool = "zeek_triage_pcap"
+	result.Tool = "triage_pcap"
 	result.PcapPath = pcapPath
 	result.RequestedPath = pcapResolution.Requested
 	result.ResolvedPath = pcapResolution.Resolved
 	h.finalizeArtifactRun(ctx, result, artifactRun)
 
 	resp := map[string]interface{}{
-		"tool":              "zeek_triage_pcap",
+		"tool":              "triage_pcap",
 		"pcap_path":         pcapPath,
 		"requested_path":    pcapResolution.Requested,
 		"resolved_path":     pcapResolution.Resolved,
@@ -784,7 +732,7 @@ func (h *Handler) handleTriagePcap(ctx context.Context, request mcp.CallToolRequ
 		"manifest_path":     result.ManifestPath,
 		"artifacts":         result.Artifacts,
 		"suggested_scripts": suggested,
-		"recommended_next":  []string{"gowireshark_validate_filter", "gowireshark_verify_zeek_alert"},
+		"recommended_next":  []string{"epan_validate_filter", "epan_verify_zeek_alert"},
 	}
 	if infoErr != nil {
 		resp["inspect_error"] = infoErr.Error()
@@ -840,7 +788,7 @@ func listPcaps(dir string) []map[string]interface{} {
 
 func retentionInfo(createdAt string) RetentionInfo {
 	info := RetentionInfo{CreatedAt: createdAt}
-	retentionDays := envInt("ZEEK_MCP_ARTIFACT_RETENTION_DAYS", 0)
+	retentionDays := envInt("ZEEK_ARTIFACT_RETENTION_DAYS", 0)
 	if retentionDays <= 0 {
 		return info
 	}
@@ -875,7 +823,7 @@ func totalAnalysisRunBytes(summaries []AnalysisRunSummary) int64 {
 func cleanupAnalysisRuns(outputRoot string, olderThanDays int, maxTotalBytes int64, dryRun bool, confirm bool) CleanupResult {
 	runsRoot := filepath.Join(outputRoot, "runs")
 	result := CleanupResult{
-		Tool:          "zeek_cleanup_runs",
+		Tool:          "cleanup_runs",
 		OutputDir:     outputRoot,
 		DryRun:        dryRun,
 		Confirmed:     confirm,
@@ -1031,7 +979,7 @@ func pathErrorResult(err error) *mcp.CallToolResult {
 	payload["path_maps"] = pathErr.Mappings
 	payload["recommended_intake_dirs"] = recommendedIntakeDirs(pathErr.Mappings)
 	payload["example_paths"] = pathExamples(pathErr.Mappings)
-	payload["next_tool"] = "zeek_list_pcaps"
+	payload["next_tool"] = "list_pcaps"
 	text, _ := json.MarshalIndent(payload, "", "  ")
 	return &mcp.CallToolResult{
 		Result: mcp.Result{Meta: &mcp.Meta{AdditionalFields: map[string]any{"error_code": "INVALID_PATH"}}},
@@ -1081,7 +1029,7 @@ func recommendedIntakeDirs(maps []PathMap) []string {
 }
 
 func validationErrorResult(msg string) *mcp.CallToolResult {
-	payload := errorEnvelope("zeek_validate_script", "", "MISSING_REQUIRED_PARAM", msg, false)
+	payload := errorEnvelope("validate_script", "", "MISSING_REQUIRED_PARAM", msg, false)
 	payload["valid"] = false
 	text, _ := json.MarshalIndent(payload, "", "  ")
 	return &mcp.CallToolResult{
@@ -1148,7 +1096,7 @@ func errorCodeForMessage(msg string) string {
 func suggestionForError(code string) string {
 	switch code {
 	case "INVALID_PATH":
-		return "Call zeek_list_pcaps and retry with one of the returned path values, or restart the MCP server with a matching Docker volume and ZEEK_MCP_PATH_MAPS."
+		return "Call list_pcaps and retry with one of the returned path values, or restart the MCP server with a matching Docker volume and ZEEK_PATH_MAPS."
 	case "MISSING_REQUIRED_PARAM":
 		return "Check the tool input schema and provide the required field before retrying."
 	case "OUTPUT_DIR_UNAVAILABLE":
@@ -1163,9 +1111,9 @@ func suggestionForError(code string) string {
 func nextToolForError(code string) string {
 	switch code {
 	case "INVALID_PATH":
-		return "zeek_list_pcaps"
+		return "list_pcaps"
 	case "OUTPUT_DIR_UNAVAILABLE":
-		return "zeek_health_check"
+		return "health_check"
 	default:
 		return ""
 	}

@@ -5,7 +5,7 @@ This guide shows the shortest path from installing Zeek MCP to asking an MCP-cap
 ## 1. Install The Docker Image
 
 ```bash
-docker pull ghcr.io/randolphcyg/zeek_mcp:latest
+docker pull ghcr.io/randolphcyg/zeek:latest
 ```
 
 ## 2. Prepare Output Directory
@@ -13,7 +13,7 @@ docker pull ghcr.io/randolphcyg/zeek_mcp:latest
 Create a local directory for analysis artifacts:
 
 ```bash
-mkdir -p ~/zeek_mcp_outputs
+mkdir -p ~/zeek_outputs
 ```
 
 ## 3. Configure Your MCP Client
@@ -23,7 +23,7 @@ The recommended configuration mounts `/Users` (macOS) at the same path inside th
 ```json
 {
   "mcpServers": {
-    "zeek_mcp": {
+    "zeek": {
       "command": "docker",
       "args": [
         "run",
@@ -32,10 +32,10 @@ The recommended configuration mounts `/Users` (macOS) at the same path inside th
         "-v",
         "/Users:/Users:ro",
         "-v",
-        "/Users/alice/zeek_mcp_outputs:/outputs",
+        "/Users/alice/zeek_outputs:/outputs",
         "-e",
-        "ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=false",
-        "ghcr.io/randolphcyg/zeek_mcp:latest",
+        "ZEEK_ENABLE_CUSTOM_SCRIPT=false",
+        "ghcr.io/randolphcyg/zeek:latest",
         "--base-dir",
         "/app",
         "--scripts-dir",
@@ -46,7 +46,7 @@ The recommended configuration mounts `/Users` (macOS) at the same path inside th
 }
 ```
 
-Replace `/Users/alice/zeek_mcp_outputs` with your output directory path.
+Replace `/Users/alice/zeek_outputs` with your output directory path.
 
 See `examples/mcp/` and `docs/mcp-clients.md` for client-specific configs and Linux setup.
 
@@ -90,14 +90,14 @@ Execution tools return:
 Artifacts are written under:
 
 ```text
-~/zeek_mcp_outputs/runs/<run_id>/
+~/zeek_outputs/runs/<run_id>/
   logs/
   extracted/
   reports/
   manifest.json
 ```
 
-Use `zeek_get_run_manifest` when another agent needs to continue from a previous run.
+Use `get_run_manifest` when another agent needs to continue from a previous run.
 
 ## Troubleshooting
 
@@ -105,20 +105,20 @@ Use `zeek_get_run_manifest` when another agent needs to continue from a previous
 - **output_dir_unavailable**: `/outputs` is not mounted or is read-only. Ensure the output volume is writable.
 - **docker: command not found**: install Docker Desktop or Docker Engine.
 - **pull access denied**: confirm the GHCR package is public or that Docker is logged in with access.
-- **No protocol metadata from `zeek_inspect_capture`**: the slim image does not include `tshark/capinfos`; Zeek MCP falls back to Zeek logs where possible. Use `--with-pcap-tools` build for richer metadata.
+- **No protocol metadata from `inspect_capture`**: the slim image does not include `tshark/capinfos`; Zeek MCP falls back to Zeek logs where possible. Use `--with-pcap-tools` build for richer metadata.
 
 ## Alternative: Native Binary (No Docker)
 
-If Zeek is installed on your host, run `zeek_mcp` directly. Any filesystem path is accessible with zero configuration:
+If Zeek is installed on your host, run `zeek` directly. Any filesystem path is accessible with zero configuration:
 
 ```json
 {
   "mcpServers": {
-    "zeek_mcp": {
-      "command": "/path/to/zeek_mcp",
+    "zeek": {
+      "command": "/path/to/zeek",
       "args": [
-        "--base-dir", "/path/to/zeek_mcp_project",
-        "--scripts-dir", "/path/to/zeek_mcp_project/scripts"
+        "--base-dir", "/path/to/zeek_project",
+        "--scripts-dir", "/path/to/zeek_project/scripts"
       ]
     }
   }

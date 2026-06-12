@@ -1,11 +1,13 @@
 package main
 
-import "github.com/mark3labs/mcp-go/mcp"
+import (
+	"github.com/mark3labs/mcp-go/mcp"
+)
 
 func buildTools() []mcp.Tool {
-	return []mcp.Tool{
+	tools := []mcp.Tool{
 		{
-			Name:        "zeek_list_detection_scripts",
+			Name:        "list_scripts",
 			Description: "List bundled Zeek scripts and metadata. Supports detection, extraction, and utility script discovery.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -30,28 +32,28 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_inspect_capture",
-			Description: "Inspect a pcap file and return capture metadata, observed protocols, and suggested Zeek detection scripts.",
+			Name:        "inspect_capture",
+			Description: "Inspect a pcap file and return capture metadata, observed protocols, and suggested analysis scripts. When tshark/capinfos is available, protocol metadata is richer; without them, falls back to Zeek-driven inspection.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
 					"pcap_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Absolute path to the pcap file.",
+						"description": "Path obtained from list_scripts or a valid intake directory path.",
 					},
 				},
 				Required: []string{"pcap_path"},
 			},
 		},
 		{
-			Name:        "zeek_detect_threats",
-			Description: "Run bundled Zeek detection scripts against a pcap and return normalized alerts, evidence, IOCs, and execution statistics. If pcap_path fails, call zeek_list_pcaps and retry with a returned path.",
+			Name:        "detect_threats",
+			Description: "Run bundled Zeek detection scripts against a pcap and return normalized alerts, evidence, IOCs, and execution statistics. If pcap_path fails, call list_scripts and retry with a returned path. Set extract_files=true to also run file extraction scripts.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
 					"pcap_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Absolute path to the pcap file.",
+						"description": "Path obtained from list_scripts or a valid intake directory path.",
 					},
 					"scripts": map[string]interface{}{
 						"type": "array",
@@ -66,32 +68,32 @@ func buildTools() []mcp.Tool {
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional directory for extracted files when extract_files is true. Host paths can be translated through configured path maps.",
+						"description": "Writable output root. Defaults to /outputs when available.",
 					},
 				},
 				Required: []string{"pcap_path"},
 			},
 		},
 		{
-			Name:        "zeek_extract_files",
-			Description: "Extract suspicious files from a pcap using bundled Zeek file-analysis extraction scripts.",
+			Name:        "extract_files",
+			Description: "Extract files detected by Zeek's File Analysis framework from a pcap using bundled extraction scripts.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
 					"pcap_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Absolute path to the pcap file.",
+						"description": "Path obtained from list_scripts or a valid intake directory path.",
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional directory for extracted files. Host paths can be translated through configured path maps.",
+						"description": "Writable output root. Defaults to /outputs when available.",
 					},
 				},
 				Required: []string{"pcap_path"},
 			},
 		},
 		{
-			Name:        "zeek_get_detection_script",
+			Name:        "get_script",
 			Description: "Return metadata and optional source code for one bundled Zeek script.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -109,7 +111,7 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_health_check",
+			Name:        "health_check",
 			Description: "Return Zeek MCP health, server version, Zeek availability, and loaded script counts.",
 			InputSchema: mcp.ToolInputSchema{
 				Type:       "object",
@@ -117,7 +119,7 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_validate_script",
+			Name:        "validate_script",
 			Description: "Validate Zeek script syntax with zeek --parse-only. Accepts a registered script, a script path, or direct script content.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -138,63 +140,21 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_get_version",
-			Description: "Return the installed Zeek version and Zeek MCP build metadata.",
-			InputSchema: mcp.ToolInputSchema{
-				Type:       "object",
-				Properties: map[string]interface{}{},
-			},
-		},
-		{
-			Name:        "zeek_reload_scripts",
-			Description: "Rescan the scripts directory and reload bundled Zeek script metadata without restarting the MCP server.",
-			InputSchema: mcp.ToolInputSchema{
-				Type:       "object",
-				Properties: map[string]interface{}{},
-			},
-		},
-		{
-			Name:        "zeek_run_custom_script",
-			Description: "Validate and run an Agent-generated Zeek script against a pcap. Disabled unless ZEEK_MCP_ENABLE_CUSTOM_SCRIPT=true.",
-			InputSchema: mcp.ToolInputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"pcap_path": map[string]interface{}{
-						"type":        "string",
-						"description": "Absolute path to the pcap file.",
-					},
-					"script_content": map[string]interface{}{
-						"type":        "string",
-						"description": "Zeek script content to validate and execute.",
-					},
-					"timeout_seconds": map[string]interface{}{
-						"type":        "number",
-						"description": "Optional execution timeout in seconds. The server default is used when omitted.",
-					},
-					"output_dir": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional output root. The server creates runs/<run_id>/ under this directory.",
-					},
-				},
-				Required: []string{"pcap_path", "script_content"},
-			},
-		},
-		{
-			Name:        "zeek_generate_logs",
+			Name:        "generate_logs",
 			Description: "Run Zeek on a pcap and return compact JSON summaries for selected Zeek logs.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
 					"pcap_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Absolute path to the pcap file.",
+						"description": "Path obtained from list_scripts or a valid intake directory path.",
 					},
 					"logs": map[string]interface{}{
 						"type": "array",
 						"items": map[string]interface{}{
 							"type": "string",
 						},
-						"description": "Log names to summarize, such as conn, dns, http, ssl, x509, files, ssh, smtp, smb, rdp, tunnel, weird, notice, or analyzer.",
+						"description": "Log names to summarize, such as conn, dns, http, ssl, x509, files, ssh, smtp, smb, rdp, tunnel, weird, notice, or analyzer. When omitted, summarizes all available log types.",
 					},
 					"max_records": map[string]interface{}{
 						"type":        "number",
@@ -202,25 +162,25 @@ func buildTools() []mcp.Tool {
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional output root. The server creates runs/<run_id>/ under this directory.",
+						"description": "Writable output root. Defaults to /outputs when available.",
 					},
 				},
 				Required: []string{"pcap_path"},
 			},
 		},
 		{
-			Name:        "zeek_match_intel",
+			Name:        "match_intel",
 			Description: "Run Zeek Intel framework matching for supplied indicators or an Intel TSV file and return normalized hits.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
 					"pcap_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Absolute path to the pcap file.",
+						"description": "Path obtained from list_scripts or a valid intake directory path.",
 					},
 					"indicators": map[string]interface{}{
 						"type":        "object",
-						"description": "Indicator lists keyed by ips, domains, urls, or hashes.",
+						"description": "Indicator map with optional keys: ips (string array of IP addresses), domains (string array of domain names), urls (string array of URLs), hashes (string array of file hashes). At least one indicator or intel_file is required.",
 					},
 					"intel_file": map[string]interface{}{
 						"type":        "string",
@@ -228,21 +188,21 @@ func buildTools() []mcp.Tool {
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional output root. The server creates runs/<run_id>/ under this directory.",
+						"description": "Writable output root. Defaults to /outputs when available.",
 					},
 				},
 				Required: []string{"pcap_path"},
 			},
 		},
 		{
-			Name:        "zeek_run_signature",
-			Description: "Validate and run Zeek signature content or a signature file against a pcap.",
+			Name:        "run_signature",
+			Description: "Validate and run Zeek signature content or a signature file against a pcap. Signature syntax is validated by Zeek's built-in signature framework at runtime.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
 					"pcap_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Absolute path to the pcap file.",
+						"description": "Path obtained from list_scripts or a valid intake directory path.",
 					},
 					"signature_content": map[string]interface{}{
 						"type":        "string",
@@ -254,14 +214,14 @@ func buildTools() []mcp.Tool {
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional output root. The server creates runs/<run_id>/ under this directory.",
+						"description": "Writable output root. Defaults to /outputs when available.",
 					},
 				},
 				Required: []string{"pcap_path"},
 			},
 		},
 		{
-			Name:        "zeek_get_run_manifest",
+			Name:        "get_run_manifest",
 			Description: "Read an analysis run artifact manifest by run_id or manifest_path so downstream agents can continue analysis.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -276,13 +236,13 @@ func buildTools() []mcp.Tool {
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional output root used to resolve run_id when not using the default /outputs mount.",
+						"description": "Writable output root. Defaults to /outputs when available.",
 					},
 				},
 			},
 		},
 		{
-			Name:        "zeek_list_runs",
+			Name:        "list_runs",
 			Description: "List recent analysis runs from the configured output directory.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -293,14 +253,14 @@ func buildTools() []mcp.Tool {
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional output root to list. Defaults to /outputs when mounted.",
+						"description": "Writable output root. Defaults to /outputs when available.",
 					},
 				},
 			},
 		},
 		{
-			Name:        "zeek_cleanup_runs",
-			Description: "Preview or delete old analysis run artifacts from the configured output directory. Deletion requires dry_run=false and confirm=true.",
+			Name:        "cleanup_runs",
+			Description: "WARNING: Destructive operation. Preview or delete old analysis run artifacts from the configured output directory. Always preview with dry_run=true first. Deletion requires dry_run=false and confirm=true.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -322,13 +282,13 @@ func buildTools() []mcp.Tool {
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional output root to clean. Defaults to /outputs when mounted.",
+						"description": "Writable output root. Defaults to /outputs when available.",
 					},
 				},
 			},
 		},
 		{
-			Name:        "zeek_list_pcaps",
+			Name:        "list_pcaps",
 			Description: "List PCAP files from configured intake directories. Returned path values are directly usable as pcap_path in Zeek tools.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
@@ -341,14 +301,14 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "zeek_triage_pcap",
-			Description: "High-success workflow tool: inspect one pcap, run bundled detections, and return a compact triage summary plus manifest references.",
+			Name:        "triage_pcap",
+			Description: "Composite workflow tool: inspect capture metadata, run all enabled detection scripts, and return a unified triage summary with manifest references. Recommended single-call tool for routine pcap analysis.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
 					"pcap_path": map[string]interface{}{
 						"type":        "string",
-						"description": "Path returned by zeek_list_pcaps or a path under a configured path map.",
+						"description": "Path returned by list_pcaps or a path under a configured path map.",
 					},
 					"scripts": map[string]interface{}{
 						"type":        "array",
@@ -357,11 +317,42 @@ func buildTools() []mcp.Tool {
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional output root. Defaults to /outputs when writable.",
+						"description": "Writable output root. Defaults to /outputs when available.",
 					},
 				},
 				Required: []string{"pcap_path"},
 			},
 		},
 	}
+
+	if envBool("ZEEK_ENABLE_CUSTOM_SCRIPT", false) {
+		tools = append(tools, mcp.Tool{
+			Name:        "run_custom_script",
+			Description: "Validate and run an Agent-generated Zeek script against a pcap. WARNING: Only enabled when ZEEK_ENABLE_CUSTOM_SCRIPT=true. Use only in sandboxed environments.",
+			InputSchema: mcp.ToolInputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"pcap_path": map[string]interface{}{
+						"type":        "string",
+						"description": "Path obtained from list_scripts or a valid intake directory path.",
+					},
+					"script_content": map[string]interface{}{
+						"type":        "string",
+						"description": "Zeek script content to validate and execute.",
+					},
+					"timeout_seconds": map[string]interface{}{
+						"type":        "number",
+						"description": "Optional execution timeout in seconds. The server default is used when omitted.",
+					},
+					"output_dir": map[string]interface{}{
+						"type":        "string",
+						"description": "Writable output root. Defaults to /outputs when available.",
+					},
+				},
+				Required: []string{"pcap_path", "script_content"},
+			},
+		})
+	}
+
+	return tools
 }
