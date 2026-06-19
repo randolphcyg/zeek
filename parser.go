@@ -32,17 +32,9 @@ type Talker struct {
 	BytesSent   int    `json:"bytes_sent"`
 }
 
-
-
+// GetPcapInfo collects pcap metadata using capinfos (fast path) with Zeek fallback
+// for protocol and duration data when capinfos is unavailable or incomplete.
 func GetPcapInfo(pcapPath string) (*PcapInfo, error) {
-	return getPcapInfo(pcapPath, false)
-}
-
-func GetPcapInfoForInspection(pcapPath string) (*PcapInfo, error) {
-	return getPcapInfo(pcapPath, true)
-}
-
-func getPcapInfo(pcapPath string, zeekFallback bool) (*PcapInfo, error) {
 	if _, err := os.Stat(pcapPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("pcap file not found: %s", pcapPath)
 	}
@@ -60,11 +52,11 @@ func getPcapInfo(pcapPath string, zeekFallback bool) (*PcapInfo, error) {
 		info.FileSize = stat.Size()
 	}
 
+	// Fast path: use capinfos for packet count and duration
 	cmd := exec.Command("capinfos", "-c", "-d", "-u", "-e", pcapPath)
 	output, capinfosErr := cmd.CombinedOutput()
-	packetCountKnown := false
 	if capinfosErr != nil && len(output) == 0 {
-		info.Warnings = append(info.Warnings, fmt.Sprintf("capinfos is unavailable or failed: %s", capinfosErr.Error()))
+		info.Warnings = append(info.Warnings, fmt.Sprintf("capinfos is unavailable: %s", capinfosErr.Error()))
 	}
 
 	if len(output) > 0 {
@@ -73,7 +65,6 @@ func getPcapInfo(pcapPath string, zeekFallback bool) (*PcapInfo, error) {
 			line := scanner.Text()
 			if strings.Contains(line, "Number of packets") && info.PacketCount == 0 {
 				fmt.Sscanf(line, "Number of packets: %d", &info.PacketCount)
-				packetCountKnown = true
 			}
 			if strings.Contains(line, "Capture duration") && info.Duration == 0 {
 				fmt.Sscanf(line, "Capture duration: %f", &info.Duration)
@@ -82,46 +73,15 @@ func getPcapInfo(pcapPath string, zeekFallback bool) (*PcapInfo, error) {
 		}
 	}
 
-	cmd2 := exec.Command("tshark", "-r", pcapPath, "-q", "-z", "io,phs")
-	output2, tsharkErr := cmd2.Output()
-	if tsharkErr != nil {
-		info.Warnings = append(info.Warnings, fmt.Sprintf("tshark is unavailable or failed: %s", tsharkErr.Error()))
-	}
-	if output2 != nil {
-		scanner := bufio.NewScanner(strings.NewReader(string(output2)))
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			for _, proto := range knownProtocols {
-				if strings.Contains(strings.ToLower(line), strings.ToLower(proto)) {
-					info.Protocols = appendIfMissing(info.Protocols, proto)
-				}
-			}
-		}
-	}
-
-	if info.PacketCount == 0 {
-		cmd3 := exec.Command("capinfos", "-c", pcapPath)
-		output3, err := cmd3.Output()
-		if err == nil && output3 != nil {
-			fmt.Sscanf(string(output3), "Number of packets: %d", &info.PacketCount)
-			packetCountKnown = true
-		}
-	}
-
-	if zeekFallback && (len(info.Protocols) == 0 || !info.DurationKnown) {
-		enrichPcapInfoFromZeek(info, pcapPath)
-	}
+	// Always fall back to Zeek for protocol info and any missing metadata.
+	// This removes the dependency on tshark and works even when capinfos is unavailable.
+	enrichPcapInfoFromZeek(info, pcapPath)
 
 	if !info.DurationKnown {
 		info.Warnings = append(info.Warnings, "capture duration is unavailable")
 	}
 	if len(info.Protocols) == 0 {
 		info.Warnings = append(info.Warnings, "no supported protocol summary was detected")
-	}
-	if packetCountKnown && info.PacketCount <= 1 && len(info.Protocols) == 0 {
-		info.Analyzable = false
-		info.AnalysisStatus = "insufficient_traffic"
-		info.Warnings = append(info.Warnings, "pcap has too little analyzable traffic for Zeek detection scripts")
 	}
 
 	return info, nil
@@ -159,9 +119,7 @@ func enrichPcapInfoFromZeek(info *PcapInfo, pcapPath string) {
 		return
 	}
 
-	if applyZeekLogMetadata(info, workDir) {
-		info.Warnings = append(info.Warnings, "used Zeek log metadata fallback because capinfos/tshark metadata was incomplete")
-	}
+	applyZeekLogMetadata(info, workDir)
 }
 
 func applyZeekLogMetadata(info *PcapInfo, workDir string) bool {
@@ -271,11 +229,6 @@ func readZeekJSONRecords(path string, limit int) []map[string]interface{} {
 		}
 	}
 	return records
-}
-
-var knownProtocols = []string{
-	"tcp", "udp", "dns", "http", "https", "ssh", "smtp", "ftp",
-	"smb", "dhcp", "arp", "icmp", "tls", "ssl", "modbus", "mqtt",
 }
 
 func appendIfMissing(slice []string, s string) []string {

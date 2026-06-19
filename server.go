@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -21,17 +23,18 @@ var (
 )
 
 type MCPServer struct {
-	server   *server.MCPServer
-	registry *ScriptRegistry
-	executor *Executor
-	baseDir  string
-	paths    *PathResolver
+	server    *server.MCPServer
+	registry  *ScriptRegistry
+	executor  *Executor
+	baseDir   string
+	paths     *PathResolver
+	startTime time.Time
 }
 
 func NewMCPServer(baseDir, scriptsDir string, pathMaps []PathMap) *MCPServer {
 	registry := NewScriptRegistry(scriptsDir)
 	if err := registry.Scan(); err != nil {
-		log.Printf("WARN: failed to scan scripts: %v", err)
+		slog.Warn("failed to scan scripts", "error", err)
 	}
 
 	executor := NewExecutor(ExecutorConfig{
@@ -53,6 +56,8 @@ func NewMCPServer(baseDir, scriptsDir string, pathMaps []PathMap) *MCPServer {
 		server.WithLogging(),
 	)
 
+	handler.mcpServer = s
+
 	tools := buildTools()
 	for _, tool := range tools {
 		s.AddTool(tool, handler.dispatchTool)
@@ -60,18 +65,40 @@ func NewMCPServer(baseDir, scriptsDir string, pathMaps []PathMap) *MCPServer {
 	handler.registerResources(s)
 
 	return &MCPServer{
-		server:   s,
-		registry: registry,
-		executor: executor,
-		baseDir:  baseDir,
-		paths:    handler.paths,
+		server:    s,
+		registry:  registry,
+		executor:  executor,
+		baseDir:   baseDir,
+		paths:     handler.paths,
+		startTime: time.Now(),
 	}
 }
 
-func (h *Handler) dispatchTool(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *Handler) dispatchTool(ctx context.Context, request mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 	start := time.Now()
 	traceID := newTraceID("zeek")
-	result, err := h.dispatchToolInner(ctx, request)
+
+	// Panic recovery: prevent a single panicking handler from crashing the server.
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic in tool handler",
+				"tool", request.Params.Name,
+				"trace_id", traceID,
+				"panic", r,
+				"stack", string(debug.Stack()),
+			)
+			result = envelopeResult(request.Params.Name, traceID, "INTERNAL_PANIC",
+				fmt.Sprintf("internal panic: %v", r), false)
+			err = nil
+		}
+	}()
+
+	// Extract progress token for long-running operations
+	if request.Params.Meta != nil && request.Params.Meta.ProgressToken != nil {
+		ctx = withProgressToken(ctx, request.Params.Meta.ProgressToken)
+	}
+
+	result, err = h.dispatchToolInner(ctx, request)
 	status := "success"
 	errorCode := ""
 	if err != nil {
@@ -100,38 +127,20 @@ func (h *Handler) dispatchTool(ctx context.Context, request mcp.CallToolRequest)
 
 func (h *Handler) dispatchToolInner(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	switch request.Params.Name {
-	case "list_scripts":
-		return h.handleListScripts(ctx, request)
-	case "inspect_capture":
-		return h.handleGetPcapInfo(ctx, request)
-	case "detect_threats":
-		return h.handleRunDetection(ctx, request)
+	case "triage_pcap":
+		return h.handleTriagePcap(ctx, request)
+	case "summarize_logs":
+		return h.handleSummarizeLogs(ctx, request)
+	case "hunt_intel":
+		return h.handleHuntIntel(ctx, request)
+	case "hunt_signature":
+		return h.handleHuntSignature(ctx, request)
 	case "extract_files":
 		return h.handleExtractFiles(ctx, request)
-	case "get_script":
-		return h.handleGetScriptDetail(ctx, request)
-	case "health_check":
-		return h.handleHealthCheck(ctx, request)
 	case "validate_script":
 		return h.handleSyntaxCheck(ctx, request)
 	case "run_custom_script":
 		return h.handleRunCustomScript(ctx, request)
-	case "generate_logs":
-		return h.handleGenerateLogs(ctx, request)
-	case "match_intel":
-		return h.handleRunIntelMatch(ctx, request)
-	case "run_signature":
-		return h.handleRunSignature(ctx, request)
-	case "get_run_manifest":
-		return h.handleGetArtifactManifest(ctx, request)
-	case "list_runs":
-		return h.handleListAnalysisRuns(ctx, request)
-	case "cleanup_runs":
-		return h.handleCleanupAnalysisRuns(ctx, request)
-	case "list_pcaps":
-		return h.handleListPcaps(ctx, request)
-	case "triage_pcap":
-		return h.handleTriagePcap(ctx, request)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", request.Params.Name)), nil
 	}
@@ -173,11 +182,14 @@ func writeToolCallLog(toolName, traceID string, input any, status, errorCode str
 }
 
 func (ms *MCPServer) logStartup(transport string) {
-	log.Printf("INFO: Zeek MCP Server v%s starting", Version)
-	log.Printf("INFO: Transport: %s", transport)
-	log.Printf("INFO: Scripts loaded: %d", len(ms.registry.ListScripts(ListScriptsRequest{})))
-	log.Printf("INFO: Path maps configured: %d", len(ms.paths.Mappings()))
-	log.Printf("INFO: Git commit: %s, Build time: %s", GitCommit, BuildTime)
+	slog.Info("Zeek MCP Server starting",
+		"version", Version,
+		"transport", transport,
+		"scripts_loaded", len(ms.registry.ListScripts(ListScriptsRequest{})),
+		"path_maps", len(ms.paths.Mappings()),
+		"git_commit", GitCommit,
+		"build_time", BuildTime,
+	)
 }
 
 func (ms *MCPServer) Run() error {
@@ -189,33 +201,98 @@ func (ms *MCPServer) RunStdio() error {
 	return server.ServeStdio(ms.server)
 }
 
+func (ms *MCPServer) Shutdown() {
+	slog.Info("Zeek MCP Server shutting down")
+}
+
 func (ms *MCPServer) RunHTTP(addr, endpoint, tlsCert, tlsKey string) error {
 	ms.logStartup("streamable_http")
 	if endpoint == "" {
 		endpoint = "/mcp"
 	}
+
+	authToken := strings.TrimSpace(os.Getenv("ZEEK_AUTH_TOKEN"))
+
 	httpServer := server.NewStreamableHTTPServer(
 		ms.server,
 		server.WithEndpointPath(endpoint),
 	)
+
 	mux := http.NewServeMux()
 	mux.Handle(endpoint, httpServer)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok","service":"zeek"}`))
-	})
+	mux.HandleFunc("/healthz", ms.healthzHandler())
+
+	var handler http.Handler = mux
+
+	// Bearer token authentication middleware
+	if authToken != "" {
+		handler = authMiddleware(authToken)(mux)
+		slog.Info("bearer token authentication enabled")
+	}
 
 	useTLS := tlsCert != "" && tlsKey != ""
 	if useTLS {
-		log.Printf("INFO: HTTPS MCP endpoint listening on %s%s", addr, endpoint)
+		slog.Info("HTTPS MCP endpoint listening", "addr", addr, "endpoint", endpoint)
 	} else {
-		log.Printf("INFO: HTTP MCP endpoint listening on %s%s", addr, endpoint)
+		slog.Info("HTTP MCP endpoint listening", "addr", addr, "endpoint", endpoint)
 	}
 
-	if useTLS {
-		return http.ListenAndServeTLS(addr, tlsCert, tlsKey, mux)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: handler,
 	}
-	return http.ListenAndServe(addr, mux)
+	if useTLS {
+		return srv.ListenAndServeTLS(tlsCert, tlsKey)
+	}
+	return srv.ListenAndServe()
+}
+
+func (ms *MCPServer) healthzHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		uptime := time.Since(ms.startTime).String()
+		scriptCount := len(ms.registry.ListScripts(ListScriptsRequest{}))
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":         "ok",
+			"service":        "zeek",
+			"version":        Version,
+			"uptime":         uptime,
+			"scripts_loaded": scriptCount,
+			"tools":          len(buildTools()),
+		})
+	}
+}
+
+// authMiddleware returns an HTTP middleware that validates Bearer token authentication.
+func authMiddleware(expectedToken string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Allow health check without auth
+			if r.URL.Path == "/healthz" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			auth := r.Header.Get("Authorization")
+			if !strings.HasPrefix(auth, "Bearer ") {
+				w.Header().Set("content-type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": "missing or invalid Authorization header",
+				})
+				return
+			}
+			token := strings.TrimPrefix(auth, "Bearer ")
+			if token != expectedToken {
+				w.Header().Set("content-type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": "invalid bearer token",
+				})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func (h *Handler) cleanupArtifactsOnStart() {
@@ -224,15 +301,19 @@ func (h *Handler) cleanupArtifactsOnStart() {
 	}
 	root, err := h.resolveOutputRoot(map[string]interface{}{})
 	if err != nil {
-		log.Printf("WARN: artifact cleanup on start skipped: %v", err)
+		slog.Warn("artifact cleanup on start skipped", "error", err)
 		return
 	}
 	retentionDays := envInt("ZEEK_ARTIFACT_RETENTION_DAYS", 0)
 	maxBytes := int64(envInt("ZEEK_ARTIFACT_MAX_BYTES", 0))
 	if retentionDays <= 0 && maxBytes <= 0 {
-		log.Printf("INFO: artifact cleanup on start skipped: no TTL or max bytes configured")
+		slog.Info("artifact cleanup on start skipped: no TTL or max bytes configured")
 		return
 	}
 	result := cleanupAnalysisRuns(root, retentionDays, maxBytes, false, true)
-	log.Printf("INFO: artifact cleanup on start completed: candidates=%d deleted=%d deleted_bytes=%d", result.CandidateRuns, result.DeletedRuns, result.DeletedBytes)
+	slog.Info("artifact cleanup on start completed",
+		"candidates", result.CandidateRuns,
+		"deleted", result.DeletedRuns,
+		"deleted_bytes", result.DeletedBytes,
+	)
 }

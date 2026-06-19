@@ -182,7 +182,7 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
   manifest.json  # Run metadata and artifact index
 ```
 
-使用 `get_run_manifest` 和 `list_runs` 访问历史分析结果。
+分析产物通过 `manifest.json` 和 `zeek://runs` 资源访问。
 
 ## Build Options
 

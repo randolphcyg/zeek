@@ -18,14 +18,12 @@ func TestToolNamesBreakingChange(t *testing.T) {
 		seen[tool.Name] = true
 	}
 	for _, name := range []string{
-		"health_check",
-		"inspect_capture",
-		"detect_threats",
-		"get_run_manifest",
-		"list_runs",
-		"cleanup_runs",
-		"list_pcaps",
 		"triage_pcap",
+		"summarize_logs",
+		"hunt_intel",
+		"hunt_signature",
+		"extract_files",
+		"validate_script",
 	} {
 		if !seen[name] {
 			t.Fatalf("expected tool %s to be registered", name)
@@ -33,12 +31,18 @@ func TestToolNamesBreakingChange(t *testing.T) {
 	}
 	for _, old := range []string{
 		"zeek_health",
-		"zeek_inspect_pcap",
-		"zeek_run_detection",
-		"zeek_get_artifact_manifest",
-		"zeek_list_analysis_runs",
-		"zeek_cleanup_analysis_runs",
-		"zeek_run_intel_match",
+		"inspect_capture",
+		"detect_threats",
+		"health_check",
+		"list_scripts",
+		"list_pcaps",
+		"list_runs",
+		"cleanup_runs",
+		"get_run_manifest",
+		"get_script",
+		"generate_logs",
+		"match_intel",
+		"run_signature",
 	} {
 		if seen[old] {
 			t.Fatalf("old tool %s should not be registered", old)
@@ -63,29 +67,6 @@ func TestErrorEnvelope(t *testing.T) {
 	}
 }
 
-func TestListPcapsReturnsToolReadyPaths(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sample.pcap"), []byte("pcap"), 0644); err != nil {
-		t.Fatalf("write pcap: %v", err)
-	}
-	handler := &Handler{
-		paths: NewPathResolver([]PathMap{{HostPrefix: dir, ContainerPrefix: dir}}),
-	}
-	result, err := handler.handleListPcaps(context.Background(), mcp.CallToolRequest{})
-	if err != nil {
-		t.Fatalf("handleListPcaps: %v", err)
-	}
-	body := parseToolResult(t, result)
-	pcaps := body["pcaps"].([]interface{})
-	if len(pcaps) != 1 {
-		t.Fatalf("pcaps len = %d, want 1", len(pcaps))
-	}
-	pcap := pcaps[0].(map[string]interface{})
-	if pcap["path"] != filepath.Join(dir, "sample.pcap") {
-		t.Fatalf("path = %v, want tool-ready path", pcap["path"])
-	}
-}
-
 func TestTriagePcapPathErrorIsActionable(t *testing.T) {
 	dir := t.TempDir()
 	handler := &Handler{
@@ -100,8 +81,8 @@ func TestTriagePcapPathErrorIsActionable(t *testing.T) {
 	if body["error_code"] != "INVALID_PATH" {
 		t.Fatalf("error_code = %v, want INVALID_PATH", body["error_code"])
 	}
-	if body["next_tool"] != "list_pcaps" {
-		t.Fatalf("next_tool = %v, want list_pcaps", body["next_tool"])
+	if body["next_tool"] != nil {
+		t.Fatalf("next_tool = %v, want nil", body["next_tool"])
 	}
 }
 

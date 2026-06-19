@@ -4,11 +4,9 @@ MCP clients discover these tools through `tools/list`. This page is a human refe
 
 ## Path Rules
 
-With the recommended Docker config (mounting host directories at the same path inside the container), agents can use original host paths directly for any pcap file. The server resolves path mappings through `ZEEK_PATH_MAPS` when configured, and falls back to the `/host` mount prefix when `ZEEK_HOST_MOUNT` is set.
+With the recommended Docker config (mounting host directories at the same path inside the container), agents can use original host paths directly for any pcap file. The server resolves path mappings through `ZEEK_PATH_MAPS` when configured.
 
-For restricted environments with explicit path maps, use container paths like `/pcaps/<file>.pcap`.
-
-Unmapped host paths return `INVALID_PATH`.
+Use the `zeek://pcaps` resource to discover available pcap files. Unmapped host paths return `INVALID_PATH`.
 
 ## Common Response Fields
 
@@ -23,24 +21,9 @@ Execution tools return:
 - `artifacts`: persisted logs and extracted files.
 - `warnings` and `errors`: execution diagnostics.
 
-## `health_check`
+## `triage_pcap`
 
-Checks server and Zeek runtime health.
-
-```json
-{}
-```
-
-Useful fields:
-
-- `runtime_zeek`
-- `zeek_ok`
-- `scripts_loaded`
-- `path_maps`
-
-## `inspect_capture`
-
-Inspects a pcap and suggests bundled detection scripts.
+Runs the recommended Agent workflow in one call: inspect capture metadata, run bundled detection scripts, persist artifacts, and return a compact summary.
 
 ```json
 {
@@ -48,44 +31,7 @@ Inspects a pcap and suggests bundled detection scripts.
 }
 ```
 
-Useful fields:
-
-- `protocols`
-- `services`
-- `suggested_scripts`
-- `analysis_status`
-
-## `list_scripts`
-
-Lists bundled detection, extraction, and utility scripts.
-
-```json
-{
-  "type": "detection",
-  "enabled_only": true
-}
-```
-
-Filters:
-
-- `type`: `detection`, `extraction`, or `utility`
-- `category`
-- `name`
-- `enabled_only`
-
-## `detect_threats`
-
-Runs detection scripts against one pcap.
-
-Run all enabled detection scripts:
-
-```json
-{
-  "pcap_path": "/pcaps/sample.pcap"
-}
-```
-
-Run multiple selected scripts in one analysis:
+Run selected scripts:
 
 ```json
 {
@@ -107,33 +53,19 @@ Run detections and file extraction together:
 }
 ```
 
-The `scripts` array accepts script names or ScriptIDs. Empty or omitted means all enabled detection scripts.
+The `scripts` array accepts script names or ScriptIDs. Omit to run all enabled detection scripts.
 
 Useful fields:
 
+- `capture.protocols`
 - `alerts`
-- `statistics.total_scripts_run`
-- `statistics.total_alerts`
+- `alert_count`
+- `suggested_scripts`
+- `run_id`
 - `manifest_path`
-- `artifacts`
+- `recommended_next`
 
-## `extract_files`
-
-Runs bundled extraction scripts and stores extracted files under the run directory.
-
-```json
-{
-  "pcap_path": "/pcaps/sample.pcap"
-}
-```
-
-Useful fields:
-
-- `extracted_files`
-- `artifacts` where `kind=extracted_file`
-- `manifest_path`
-
-## `generate_logs`
+## `summarize_logs`
 
 Runs Zeek and returns compact summaries of selected logs.
 
@@ -157,7 +89,7 @@ Useful fields:
 - `log_paths`
 - `artifacts` where `kind=zeek_log`
 
-## `match_intel`
+## `hunt_intel`
 
 Runs Zeek Intel matching from inline indicators or an Intel TSV file.
 
@@ -182,7 +114,7 @@ Or:
 }
 ```
 
-## `run_signature`
+## `hunt_signature`
 
 Runs Zeek signature content or a mounted signature file.
 
@@ -192,6 +124,22 @@ Runs Zeek signature content or a mounted signature file.
   "signature_content": "signature sample-sig {\\n  ip-proto == tcp\\n  event \"sample signature\"\\n}\\n"
 }
 ```
+
+## `extract_files`
+
+Runs bundled extraction scripts and stores extracted files under the run directory.
+
+```json
+{
+  "pcap_path": "/pcaps/sample.pcap"
+}
+```
+
+Useful fields:
+
+- `extracted_files`
+- `artifacts` where `kind=extracted_file`
+- `manifest_path`
 
 ## `validate_script`
 
@@ -222,104 +170,13 @@ Runs generated Zeek script content. Disabled unless `ZEEK_ENABLE_CUSTOM_SCRIPT=t
 
 Use only in a sandboxed runtime.
 
-## `get_script`
+## Resources
 
-Returns metadata and optional source for a bundled script.
+The server exposes these MCP resources for discovery:
 
-```json
-{
-  "script_name": "detect_dns_flood",
-  "include_source": true
-}
-```
-
-## `get_run_manifest`
-
-Reads a saved artifact manifest for downstream agents.
-
-```json
-{
-  "run_id": "20260528T030544Z_75db3e06"
-}
-```
-
-Or:
-
-```json
-{
-  "manifest_path": "/outputs/runs/20260528T030544Z_75db3e06/manifest.json"
-}
-```
-
-## `list_runs`
-
-Lists saved analysis runs.
-
-```json
-{
-  "limit": 10
-}
-```
-
-Useful fields:
-
-- `total`
-- `total_bytes`
-- `runs[].artifact_bytes`
-
-## `cleanup_runs`
-
-Previews or deletes old artifacts. Defaults to dry-run.
-
-Preview:
-
-```json
-{
-  "older_than_days": 30,
-  "dry_run": true
-}
-```
-
-Delete:
-
-```json
-{
-  "older_than_days": 30,
-  "dry_run": false,
-  "confirm": true
-}
-```
-
-## `list_pcaps`
-
-Lists PCAP files from configured intake directories. Use the returned `path` directly as `pcap_path` in other tools.
-
-```json
-{}
-```
-
-Useful fields:
-
-- `pcaps[].name`
-- `pcaps[].path`
-- `pcaps[].size`
-
-## `triage_pcap`
-
-Runs the recommended Agent workflow in one call: inspect capture metadata, run bundled detections, persist artifacts, and return a compact summary.
-
-```json
-{
-  "pcap_path": "/pcaps/sample.pcap"
-}
-```
-
-Useful fields:
-
-- `capture.protocols`
-- `alerts`
-- `run_id`
-- `manifest_path`
-- `recommended_next`
+- `zeek://pcaps` — Available PCAP files. Returned path values are directly usable as `pcap_path`.
+- `zeek://scripts/detections` — Enabled Zeek detection scripts that can be passed to `triage_pcap`.
+- `zeek://scripts/{id}` — Metadata and full source for a bundled Zeek script. Replace `{id}` with a script name like `detect_dns_flood`.
+- `zeek://runs` — Recent analysis run manifests from the configured output directory.
 
 Agents should only delete artifacts after explicit user approval.

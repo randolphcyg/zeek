@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 )
 
 type pathMapFlags []string
@@ -31,6 +37,13 @@ func main() {
 	flag.Var(&pathMaps, "path-map", "map a host path prefix to a container path prefix, formatted as host_prefix=container_prefix; may be repeated")
 	flag.Parse()
 
+	// Configure structured JSON logging
+	logLevel := slog.LevelInfo
+	if strings.ToLower(os.Getenv("ZEEK_LOG_LEVEL")) == "debug" {
+		logLevel = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+
 	if *showVersion {
 		fmt.Printf("zeek %s\n", Version)
 		fmt.Printf("Build Time: %s\n", BuildTime)
@@ -55,12 +68,35 @@ func main() {
 	}
 
 	ms := NewMCPServer(*baseDir, absScriptsDir, parsedPathMaps)
+
+	// Graceful shutdown: listen for SIGTERM/SIGINT
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
 	var runErr error
 	switch *transport {
 	case "stdio":
+		// stdio runs synchronously; shutdown after return
 		runErr = ms.RunStdio()
 	case "http", "streamable_http":
-		runErr = ms.RunHTTP(*listen, *endpoint, *tlsCert, *tlsKey)
+		// Run HTTP server in background, wait for signal
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- ms.RunHTTP(*listen, *endpoint, *tlsCert, *tlsKey)
+		}()
+
+		select {
+		case runErr = <-errCh:
+			// Server exited on its own
+		case <-ctx.Done():
+			slog.Info("received shutdown signal, draining...")
+			ms.Shutdown()
+			// Give in-flight requests time to complete
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			<-shutdownCtx.Done()
+			runErr = nil
+		}
 	default:
 		runErr = fmt.Errorf("unsupported transport %q; expected stdio or http", *transport)
 	}

@@ -30,6 +30,9 @@ func (h *Handler) handleRunCustomScript(ctx context.Context, request mcp.CallToo
 	if scriptContent == "" {
 		return errorResult("script_content is required"), nil
 	}
+	if errMsg := validateInputSize(scriptContent, "script_content"); errMsg != "" {
+		return errorResult(errMsg), nil
+	}
 
 	timeout := time.Duration(0)
 	if raw, ok := args["timeout_seconds"].(float64); ok && raw > 0 {
@@ -49,7 +52,7 @@ func (h *Handler) handleRunCustomScript(ctx context.Context, request mcp.CallToo
 	return textResult(FormatResultJSON(result)), nil
 }
 
-func (h *Handler) handleGenerateLogs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *Handler) handleSummarizeLogs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := getArgs(request)
 	pcapPath, _ := args["pcap_path"].(string)
 	if pcapPath == "" {
@@ -79,7 +82,7 @@ func (h *Handler) handleGenerateLogs(ctx context.Context, request mcp.CallToolRe
 	return textResult(FormatResultJSON(result)), nil
 }
 
-func (h *Handler) handleRunIntelMatch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *Handler) handleHuntIntel(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := getArgs(request)
 	pcapPath, _ := args["pcap_path"].(string)
 	if pcapPath == "" {
@@ -129,7 +132,7 @@ redef Intel::read_files += { "%s" };
 		return outputErrorResult(err), nil
 	}
 
-	result := h.executor.RunScriptsWithLogSummary(ctx, "match_intel", pcapResolution.Resolved, []string{scriptPath}, []string{"intel", "notice", "conn", "dns", "http", "files"}, envInt("ZEEK_MAX_LOG_RECORDS", 50), artifactRun)
+	result := h.executor.RunScriptsWithLogSummary(ctx, "hunt_intel", pcapResolution.Resolved, []string{scriptPath}, []string{"intel", "notice", "conn", "dns", "http", "files"}, envInt("ZEEK_MAX_LOG_RECORDS", 50), artifactRun)
 	result.PcapPath = pcapPath
 	result.RequestedPath = pcapResolution.Requested
 	result.ResolvedPath = pcapResolution.Resolved
@@ -137,7 +140,7 @@ redef Intel::read_files += { "%s" };
 	return textResult(FormatResultJSON(result)), nil
 }
 
-func (h *Handler) handleRunSignature(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *Handler) handleHuntSignature(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := getArgs(request)
 	pcapPath, _ := args["pcap_path"].(string)
 	if pcapPath == "" {
@@ -150,6 +153,11 @@ func (h *Handler) handleRunSignature(ctx context.Context, request mcp.CallToolRe
 
 	signaturePath, _ := args["signature_path"].(string)
 	signatureContent, _ := args["signature_content"].(string)
+	if signatureContent != "" {
+		if errMsg := validateInputSize(signatureContent, "signature_content"); errMsg != "" {
+			return errorResult(errMsg), nil
+		}
+	}
 	var cleanup func()
 	if signaturePath == "" && signatureContent != "" {
 		var err error

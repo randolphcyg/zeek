@@ -13,13 +13,15 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 type Handler struct {
-	registry *ScriptRegistry
-	executor *Executor
-	baseDir  string
-	paths    *PathResolver
+	registry  *ScriptRegistry
+	executor  *Executor
+	baseDir   string
+	paths     *PathResolver
+	mcpServer *server.MCPServer
 }
 
 func getArgs(request mcp.CallToolRequest) map[string]interface{} {
@@ -27,119 +29,6 @@ func getArgs(request mcp.CallToolRequest) map[string]interface{} {
 		return args
 	}
 	return map[string]interface{}{}
-}
-
-func (h *Handler) handleListScripts(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := getArgs(request)
-
-	req := ListScriptsRequest{}
-	if cat, ok := args["category"].(string); ok {
-		req.Category = cat
-	}
-	if typ, ok := args["type"].(string); ok {
-		req.Type = typ
-	}
-	if name, ok := args["name"].(string); ok {
-		req.Name = name
-	}
-	if enabledOnly, ok := args["enabled_only"].(bool); ok {
-		req.EnabledOnly = enabledOnly
-	}
-
-	scripts := h.registry.ListScripts(req)
-
-	type scriptItem struct {
-		Name        string   `json:"name"`
-		ScriptID    string   `json:"script_id"`
-		Type        string   `json:"type"`
-		Category    string   `json:"category"`
-		Description string   `json:"description"`
-		Signature   string   `json:"signature"`
-		NoticeTypes []string `json:"notice_types,omitempty"`
-		Size        string   `json:"size"`
-		Checksum    string   `json:"checksum"`
-		UpdatedAt   string   `json:"updated_at"`
-		Enabled     bool     `json:"enabled"`
-		Valid       bool     `json:"valid"`
-		Error       string   `json:"error,omitempty"`
-	}
-
-	var items []scriptItem
-	for _, s := range scripts {
-		items = append(items, scriptItem{
-			Name:        s.Name,
-			ScriptID:    s.ScriptID,
-			Type:        s.Type,
-			Category:    s.Category,
-			Description: s.Description,
-			Signature:   s.Signature,
-			NoticeTypes: s.NoticeTypes,
-			Size:        s.Size,
-			Checksum:    s.Checksum,
-			UpdatedAt:   s.UpdatedAt,
-			Enabled:     s.Enabled,
-			Valid:       s.Valid,
-			Error:       s.Error,
-		})
-	}
-
-	result := map[string]interface{}{
-		"tool":    "list_scripts",
-		"total":   len(items),
-		"scripts": items,
-	}
-
-	text, _ := json.MarshalIndent(result, "", "  ")
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.TextContent{Type: "text", Text: string(text)},
-		},
-	}, nil
-}
-
-func (h *Handler) handleGetPcapInfo(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := getArgs(request)
-	pcapPath, ok := args["pcap_path"].(string)
-	if !ok || pcapPath == "" {
-		return errorResult("pcap_path is required"), nil
-	}
-	pcapResolution, err := h.paths.ResolveExisting("pcap_path", pcapPath)
-	if err != nil {
-		return pathErrorResult(err), nil
-	}
-
-	info, err := GetPcapInfoForInspection(pcapResolution.Resolved)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get pcap info: %s", err.Error())), nil
-	}
-
-	suggestion := h.generateScriptSuggestions(info)
-
-	resp := map[string]interface{}{
-		"tool":              "inspect_capture",
-		"pcap_path":         pcapPath,
-		"requested_path":    pcapResolution.Requested,
-		"resolved_path":     pcapResolution.Resolved,
-		"path_mapped":       pcapResolution.Mapped,
-		"file_size":         info.FileSize,
-		"packet_count":      info.PacketCount,
-		"duration_sec":      info.Duration,
-		"duration_known":    info.DurationKnown,
-		"protocols":         info.Protocols,
-		"top_talkers":       info.TopTalkers,
-		"services":          info.Services,
-		"analyzable":        info.Analyzable,
-		"analysis_status":   info.AnalysisStatus,
-		"warnings":          info.Warnings,
-		"suggested_scripts": suggestion,
-	}
-
-	text, _ := json.MarshalIndent(resp, "", "  ")
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.TextContent{Type: "text", Text: string(text)},
-		},
-	}, nil
 }
 
 func (h *Handler) generateScriptSuggestions(info *PcapInfo) []string {
@@ -176,64 +65,6 @@ func (h *Handler) generateScriptSuggestions(info *PcapInfo) []string {
 	}
 
 	return suggestions
-}
-
-func (h *Handler) handleRunDetection(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := getArgs(request)
-	pcapPath, ok := args["pcap_path"].(string)
-	if !ok || pcapPath == "" {
-		return errorResult("pcap_path is required"), nil
-	}
-	pcapResolution, err := h.paths.ResolveExisting("pcap_path", pcapPath)
-	if err != nil {
-		return pathErrorResult(err), nil
-	}
-
-	var scriptNames []string
-	if scriptsRaw, ok := args["scripts"].([]interface{}); ok {
-		for _, s := range scriptsRaw {
-			if name, ok := s.(string); ok {
-				scriptNames = append(scriptNames, name)
-			}
-		}
-	}
-
-	extractFiles := false
-	if ef, ok := args["extract_files"].(bool); ok {
-		extractFiles = ef
-	}
-
-	scriptPaths := h.registry.GetScriptPaths(scriptNames, ScriptTypeDetection)
-	if len(scriptNames) > 0 && len(scriptPaths) == 0 {
-		return errorResult("no matching enabled detection scripts found"), nil
-	}
-
-	if extractFiles {
-		extractionPaths := h.registry.GetScriptPaths(nil, ScriptTypeExtraction)
-		scriptPaths = append(scriptPaths, extractionPaths...)
-	}
-
-	artifactRun, err := h.prepareArtifactRun(args)
-	if err != nil {
-		return outputErrorResult(err), nil
-	}
-	extractDir := ""
-	if extractFiles {
-		extractDir = artifactRun.ExtractedDir
-	}
-
-	result := h.executor.RunDetection(ctx, pcapResolution.Resolved, scriptPaths, extractDir, artifactRun)
-	result.PcapPath = pcapPath
-	result.RequestedPath = pcapResolution.Requested
-	result.ResolvedPath = pcapResolution.Resolved
-	h.finalizeArtifactRun(ctx, result, artifactRun)
-
-	text := FormatResultJSON(result)
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.TextContent{Type: "text", Text: text},
-		},
-	}, nil
 }
 
 func (h *Handler) handleExtractFiles(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -273,81 +104,6 @@ func (h *Handler) handleExtractFiles(ctx context.Context, request mcp.CallToolRe
 	}, nil
 }
 
-func (h *Handler) handleGetScriptDetail(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := getArgs(request)
-	scriptName, ok := args["script_name"].(string)
-	if !ok || scriptName == "" {
-		return errorResult("script_name is required"), nil
-	}
-
-	meta := h.registry.GetScript(scriptName)
-	if meta == nil {
-		return errorResult(fmt.Sprintf("script not found: %s", scriptName)), nil
-	}
-
-	resp := map[string]interface{}{
-		"tool":         "get_script",
-		"name":         meta.Name,
-		"script_id":    meta.ScriptID,
-		"type":         meta.Type,
-		"category":     meta.Category,
-		"description":  meta.Description,
-		"signature":    meta.Signature,
-		"notice_types": meta.NoticeTypes,
-		"file_path":    meta.FilePath,
-		"size":         meta.Size,
-		"checksum":     meta.Checksum,
-		"updated_at":   meta.UpdatedAt,
-		"enabled":      meta.Enabled,
-		"valid":        meta.Valid,
-	}
-	if meta.Error != "" {
-		resp["error"] = meta.Error
-	}
-	if includeSource, _ := args["include_source"].(bool); includeSource {
-		if data, err := os.ReadFile(meta.FilePath); err == nil {
-			resp["source"] = string(data)
-		}
-	}
-
-	text, _ := json.MarshalIndent(resp, "", "  ")
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.TextContent{Type: "text", Text: string(text)},
-		},
-	}, nil
-}
-
-func (h *Handler) handleHealthCheck(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	runtimeVersion, zeekErr := getZeekVersion(ctx)
-	zeekOk := zeekErr == nil
-	compatibility, versionWarnings := zeekCompatibility(runtimeVersion)
-
-	resp := map[string]interface{}{
-		"tool":               "health_check",
-		"status":             "healthy",
-		"version":            Version,
-		"mcp_version":        Version,
-		"target_zeek_lts":    TargetZeekLTS,
-		"runtime_zeek":       runtimeVersion,
-		"zeek_compatibility": compatibility,
-		"warnings":           versionWarnings,
-		"zeek_ok":            zeekOk,
-		"scripts_loaded":     len(h.registry.ListScripts(ListScriptsRequest{})),
-		"detection_scripts":  len(h.registry.ListScripts(ListScriptsRequest{Type: ScriptTypeDetection})),
-		"extraction_scripts": len(h.registry.ListScripts(ListScriptsRequest{Type: ScriptTypeExtraction})),
-		"utility_scripts":    len(h.registry.ListScripts(ListScriptsRequest{Type: ScriptTypeUtility})),
-		"path_maps":          h.paths.Mappings(),
-	}
-
-	text, _ := json.MarshalIndent(resp, "", "  ")
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.TextContent{Type: "text", Text: string(text)},
-		},
-	}, nil
-}
-
 func (h *Handler) handleSyntaxCheck(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := getArgs(request)
 
@@ -357,6 +113,12 @@ func (h *Handler) handleSyntaxCheck(ctx context.Context, request mcp.CallToolReq
 
 	if scriptName == "" && scriptPath == "" && scriptContent == "" {
 		return validationErrorResult("script_name, script_path, or script_content is required"), nil
+	}
+
+	if scriptContent != "" {
+		if errMsg := validateInputSize(scriptContent, "script_content"); errMsg != "" {
+			return errorResult(errMsg), nil
+		}
 	}
 
 	var inputPath string
@@ -526,161 +288,6 @@ func (h *Handler) finalizeArtifactRun(ctx context.Context, result *ExecutionResu
 	}
 }
 
-func (h *Handler) handleGetArtifactManifest(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := getArgs(request)
-	manifestPath, _ := args["manifest_path"].(string)
-	runID, _ := args["run_id"].(string)
-	if manifestPath == "" && runID == "" {
-		return errorResult("run_id or manifest_path is required"), nil
-	}
-	if manifestPath == "" {
-		root, err := h.resolveOutputRoot(args)
-		if err != nil {
-			return outputErrorResult(err), nil
-		}
-		manifestPath = filepath.Join(root, "runs", runID, "manifest.json")
-	}
-	resolution, err := h.paths.ResolveExisting("manifest_path", manifestPath)
-	if err != nil {
-		if _, statErr := os.Stat(manifestPath); statErr == nil {
-			resolution = PathResolution{Requested: manifestPath, Resolved: manifestPath}
-		} else {
-			return pathErrorResult(err), nil
-		}
-	}
-	manifest, err := readArtifactManifest(resolution.Resolved)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to read artifact manifest: %s", err.Error())), nil
-	}
-	resp := map[string]interface{}{
-		"tool":           "get_run_manifest",
-		"requested_path": resolution.Requested,
-		"resolved_path":  resolution.Resolved,
-		"manifest":       manifest,
-	}
-	text, _ := json.MarshalIndent(resp, "", "  ")
-	return textResult(string(text)), nil
-}
-
-func (h *Handler) handleListAnalysisRuns(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := getArgs(request)
-	limit := 20
-	if raw, ok := args["limit"].(float64); ok && raw > 0 {
-		limit = int(raw)
-	}
-	root, err := h.resolveOutputRoot(args)
-	if err != nil {
-		return outputErrorResult(err), nil
-	}
-	runsRoot := filepath.Join(root, "runs")
-	entries, err := os.ReadDir(runsRoot)
-	if err != nil {
-		resp := map[string]interface{}{
-			"tool":        "list_runs",
-			"output_dir":  root,
-			"total":       0,
-			"total_bytes": int64(0),
-			"runs":        []AnalysisRunSummary{},
-		}
-		text, _ := json.MarshalIndent(resp, "", "  ")
-		return textResult(string(text)), nil
-	}
-
-	var summaries []AnalysisRunSummary
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		manifestPath := filepath.Join(runsRoot, entry.Name(), "manifest.json")
-		manifest, err := readArtifactManifest(manifestPath)
-		if err != nil {
-			continue
-		}
-		summaries = append(summaries, AnalysisRunSummary{
-			RunID:             manifest.RunID,
-			CreatedAt:         manifest.CreatedAt,
-			Tool:              manifest.Tool,
-			Status:            manifest.Status,
-			ManifestPath:      manifestPath,
-			RequestedPcapPath: manifest.RequestedPcapPath,
-			ResolvedPcapPath:  manifest.ResolvedPcapPath,
-			ArtifactCount:     len(manifest.Artifacts),
-			ArtifactBytes:     manifestArtifactBytes(manifest, filepath.Dir(manifestPath)),
-			FindingsSummary:   manifest.FindingsSummary,
-		})
-	}
-	sort.Slice(summaries, func(i, j int) bool {
-		return summaries[i].CreatedAt > summaries[j].CreatedAt
-	})
-	if limit > 0 && len(summaries) > limit {
-		summaries = summaries[:limit]
-	}
-	resp := map[string]interface{}{
-		"tool":        "list_runs",
-		"output_dir":  root,
-		"total":       len(summaries),
-		"total_bytes": totalAnalysisRunBytes(summaries),
-		"runs":        summaries,
-	}
-	text, _ := json.MarshalIndent(resp, "", "  ")
-	return textResult(string(text)), nil
-}
-
-func (h *Handler) handleCleanupAnalysisRuns(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := getArgs(request)
-	root, err := h.resolveOutputRoot(args)
-	if err != nil {
-		return outputErrorResult(err), nil
-	}
-
-	olderThanDays := intArg(args, "older_than_days", 0)
-	maxTotalBytes := int64Arg(args, "max_total_bytes", 0)
-	dryRun := boolArg(args, "dry_run", true)
-	confirm := boolArg(args, "confirm", false)
-	if !dryRun && !confirm {
-		return errorResult("confirm=true is required when dry_run=false"), nil
-	}
-
-	result := cleanupAnalysisRuns(root, olderThanDays, maxTotalBytes, dryRun, confirm)
-	text, _ := json.MarshalIndent(result, "", "  ")
-	return textResult(string(text)), nil
-}
-
-func (h *Handler) handleListPcaps(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := getArgs(request)
-	var dirs []string
-	if dir, _ := args["directory"].(string); dir != "" {
-		resolution := h.paths.resolve(dir, false)
-		dirs = []string{resolution.Resolved}
-	} else {
-		dirs = h.paths.RecommendedIntakeDirs()
-	}
-	if len(dirs) == 0 {
-		dirs = append(dirs, "/pcaps")
-		if h.baseDir != "" {
-			dirs = append(dirs, filepath.Join(h.baseDir, "pcaps"))
-		}
-	}
-	seen := map[string]bool{}
-	var pcaps []map[string]interface{}
-	for _, dir := range dirs {
-		if dir == "" || seen[dir] {
-			continue
-		}
-		seen[dir] = true
-		items := listPcaps(dir)
-		pcaps = append(pcaps, items...)
-	}
-	resp := map[string]interface{}{
-		"tool":        "list_pcaps",
-		"directories": dirs,
-		"total":       len(pcaps),
-		"pcaps":       pcaps,
-	}
-	text, _ := json.MarshalIndent(resp, "", "  ")
-	return textResult(string(text)), nil
-}
-
 func (h *Handler) handleTriagePcap(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := getArgs(request)
 	pcapPath, _ := args["pcap_path"].(string)
@@ -692,7 +299,7 @@ func (h *Handler) handleTriagePcap(ctx context.Context, request mcp.CallToolRequ
 		return pathErrorResult(err), nil
 	}
 
-	info, infoErr := GetPcapInfoForInspection(pcapResolution.Resolved)
+	info, infoErr := GetPcapInfo(pcapResolution.Resolved)
 	var suggested []string
 	if infoErr == nil {
 		suggested = h.generateScriptSuggestions(info)
@@ -706,16 +313,41 @@ func (h *Handler) handleTriagePcap(ctx context.Context, request mcp.CallToolRequ
 		scriptPaths = h.registry.GetScriptPaths(nil, ScriptTypeDetection)
 	}
 
+	extractFiles := false
+	if ef, ok := args["extract_files"].(bool); ok {
+		extractFiles = ef
+	}
+	if extractFiles {
+		extractionPaths := h.registry.GetScriptPaths(nil, ScriptTypeExtraction)
+		scriptPaths = append(scriptPaths, extractionPaths...)
+	}
+
 	artifactRun, err := h.prepareArtifactRun(args)
 	if err != nil {
 		return outputErrorResult(err), nil
 	}
-	result := h.executor.RunDetection(ctx, pcapResolution.Resolved, scriptPaths, "", artifactRun)
+	extractDir := ""
+	if extractFiles {
+		extractDir = artifactRun.ExtractedDir
+	}
+
+	totalScripts := len(scriptPaths)
+	h.sendProgress(ctx, 0.15, floatPtr(1.0), formatProgressMessage("start", 0, totalScripts, 0))
+	h.sendProgress(ctx, 0.3, floatPtr(1.0), formatProgressMessage("zeek", 0, totalScripts, 0))
+
+	result := h.executor.RunDetection(ctx, pcapResolution.Resolved, scriptPaths, extractDir, artifactRun)
 	result.Tool = "triage_pcap"
 	result.PcapPath = pcapPath
 	result.RequestedPath = pcapResolution.Requested
 	result.ResolvedPath = pcapResolution.Resolved
 	h.finalizeArtifactRun(ctx, result, artifactRun)
+
+	alertCount := len(result.Alerts)
+	h.sendProgress(ctx, 0.7, floatPtr(1.0), formatProgressMessage("parse", 0, totalScripts, alertCount))
+	if extractFiles && len(result.Files) > 0 {
+		h.sendProgress(ctx, 0.85, floatPtr(1.0), formatProgressMessage("extract", 0, totalScripts, alertCount))
+	}
+	h.sendProgress(ctx, 1.0, floatPtr(1.0), formatProgressMessage("complete", 0, totalScripts, alertCount))
 
 	resp := map[string]interface{}{
 		"tool":              "triage_pcap",
@@ -726,13 +358,16 @@ func (h *Handler) handleTriagePcap(ctx context.Context, request mcp.CallToolRequ
 		"status":            result.Status,
 		"alerts":            result.Alerts,
 		"alert_count":       len(result.Alerts),
+		"total_scripts":     totalScripts,
+		"extracted_files":   result.Files,
+		"extracted_count":   len(result.Files),
 		"errors":            result.Errors,
 		"warnings":          result.Warnings,
 		"run_id":            result.RunID,
 		"manifest_path":     result.ManifestPath,
 		"artifacts":         result.Artifacts,
 		"suggested_scripts": suggested,
-		"recommended_next":  []string{"epan_validate_filter", "epan_verify_zeek_alert"},
+		"recommended_next":  []string{"summarize_logs", "hunt_intel"},
 	}
 	if infoErr != nil {
 		resp["inspect_error"] = infoErr.Error()
@@ -823,7 +458,7 @@ func totalAnalysisRunBytes(summaries []AnalysisRunSummary) int64 {
 func cleanupAnalysisRuns(outputRoot string, olderThanDays int, maxTotalBytes int64, dryRun bool, confirm bool) CleanupResult {
 	runsRoot := filepath.Join(outputRoot, "runs")
 	result := CleanupResult{
-		Tool:          "cleanup_runs",
+		Tool:          "artifact_cleanup",
 		OutputDir:     outputRoot,
 		DryRun:        dryRun,
 		Confirmed:     confirm,
@@ -922,6 +557,10 @@ func loadRunCleanupCandidates(runsRoot string) []CleanupCandidate {
 	return runs
 }
 
+func floatPtr(v float64) *float64 {
+	return &v
+}
+
 func intArg(args map[string]interface{}, key string, fallback int) int {
 	if raw, ok := args[key].(float64); ok {
 		return int(raw)
@@ -979,7 +618,6 @@ func pathErrorResult(err error) *mcp.CallToolResult {
 	payload["path_maps"] = pathErr.Mappings
 	payload["recommended_intake_dirs"] = recommendedIntakeDirs(pathErr.Mappings)
 	payload["example_paths"] = pathExamples(pathErr.Mappings)
-	payload["next_tool"] = "list_pcaps"
 	text, _ := json.MarshalIndent(payload, "", "  ")
 	return &mcp.CallToolResult{
 		Result: mcp.Result{Meta: &mcp.Meta{AdditionalFields: map[string]any{"error_code": "INVALID_PATH"}}},
@@ -1096,7 +734,7 @@ func errorCodeForMessage(msg string) string {
 func suggestionForError(code string) string {
 	switch code {
 	case "INVALID_PATH":
-		return "Call list_pcaps and retry with one of the returned path values, or restart the MCP server with a matching Docker volume and ZEEK_PATH_MAPS."
+		return "Check the pcap_path is accessible under a configured path map. Use the zeek://pcaps resource to discover available files."
 	case "MISSING_REQUIRED_PARAM":
 		return "Check the tool input schema and provide the required field before retrying."
 	case "OUTPUT_DIR_UNAVAILABLE":
@@ -1111,9 +749,9 @@ func suggestionForError(code string) string {
 func nextToolForError(code string) string {
 	switch code {
 	case "INVALID_PATH":
-		return "list_pcaps"
+		return ""
 	case "OUTPUT_DIR_UNAVAILABLE":
-		return "health_check"
+		return ""
 	default:
 		return ""
 	}

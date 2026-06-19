@@ -98,6 +98,7 @@ type LogSummary struct {
 
 type Executor struct {
 	config ExecutorConfig
+	sem    chan struct{} // Token-based semaphore limiting concurrent Zeek processes.
 }
 
 func NewExecutor(config ExecutorConfig) *Executor {
@@ -107,7 +108,14 @@ func NewExecutor(config ExecutorConfig) *Executor {
 	if config.Timeout == 0 {
 		config.Timeout = time.Duration(envInt("ZEEK_TIMEOUT_SECONDS", 120)) * time.Second
 	}
-	return &Executor{config: config}
+	maxConcurrent := envInt("ZEEK_MAX_CONCURRENT", 4)
+	if maxConcurrent <= 0 {
+		maxConcurrent = 4
+	}
+	return &Executor{
+		config: config,
+		sem:    make(chan struct{}, maxConcurrent),
+	}
 }
 
 // WithTimeout returns a copy of the Executor with a different timeout.
@@ -121,7 +129,7 @@ func (e *Executor) WithTimeout(timeout time.Duration) *Executor {
 func (e *Executor) RunDetection(ctx context.Context, pcapPath string, scripts []string, extractDir string, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:     "detect_threats",
+		Tool:     "triage_pcap",
 		PcapPath: pcapPath,
 		Status:   "completed",
 		Alerts:   []StandardAlert{},
@@ -142,7 +150,7 @@ func (e *Executor) RunDetection(ctx context.Context, pcapPath string, scripts []
 func (e *Executor) GenerateLogs(ctx context.Context, pcapPath string, logs []string, maxRecords int, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:         "generate_logs",
+		Tool:         "summarize_logs",
 		PcapPath:     pcapPath,
 		Status:       "completed",
 		Alerts:       []StandardAlert{},
@@ -223,7 +231,7 @@ func (e *Executor) RunCustomScript(ctx context.Context, pcapPath, scriptContent 
 func (e *Executor) RunSignature(ctx context.Context, pcapPath, signaturePath string, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:         "run_signature",
+		Tool:         "hunt_signature",
 		PcapPath:     pcapPath,
 		Status:       "completed",
 		Alerts:       []StandardAlert{},
@@ -301,15 +309,8 @@ func (run zeekRun) cleanup() {
 func (e *Executor) runZeek(ctx context.Context, pcapPath string, scripts []string, extractDir string, extraArgs []string, extraEnv []string, retain bool) zeekRun {
 	run := zeekRun{Retained: retain}
 
-	info, err := GetPcapInfo(pcapPath)
-	if err != nil {
-		run.Err = err
-		return run
-	}
-	if !info.Analyzable {
-		run.Skipped = true
-		run.Warnings = append(run.Warnings, info.Warnings...)
-		run.Cleanup = func() {}
+	if _, err := os.Stat(pcapPath); err != nil {
+		run.Err = fmt.Errorf("pcap file not found: %s", pcapPath)
 		return run
 	}
 
@@ -343,6 +344,15 @@ func (e *Executor) runZeek(ctx context.Context, pcapPath string, scripts []strin
 
 	execCtx, cancel := context.WithTimeout(ctx, e.config.Timeout)
 	defer cancel()
+
+	// Acquire semaphore to limit concurrent Zeek processes.
+	select {
+	case e.sem <- struct{}{}:
+		defer func() { <-e.sem }()
+	case <-execCtx.Done():
+		run.Err = fmt.Errorf("zeek execution throttled: %w", execCtx.Err())
+		return run
+	}
 
 	cmd := exec.CommandContext(execCtx, e.config.ZeekBinary, args...)
 	cmd.Dir = workDir
@@ -772,6 +782,25 @@ func writeTempFile(pattern, content string) (string, func(), error) {
 		return "", func() {}, err
 	}
 	return tmpFile.Name(), func() { _ = os.Remove(tmpFile.Name()) }, nil
+}
+
+// maxInputSize returns the maximum allowed size for user-supplied content (script, signature, etc.).
+func maxInputSize() int {
+	limit := envInt("ZEEK_MAX_SCRIPT_SIZE", 256*1024) // 256KB default
+	if limit <= 0 {
+		limit = 256 * 1024
+	}
+	return limit
+}
+
+// validateInputSize checks that the content does not exceed the configured limit.
+// Returns an error message if the content is too large, or empty string if valid.
+func validateInputSize(content, fieldName string) string {
+	limit := maxInputSize()
+	if len(content) > limit {
+		return fmt.Sprintf("%s exceeds maximum allowed size (%d bytes, got %d bytes)", fieldName, limit, len(content))
+	}
+	return ""
 }
 
 func validateCustomScriptSafety(scriptContent string) []string {

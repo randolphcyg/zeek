@@ -57,11 +57,7 @@ Restart the MCP client after changing its config.
 No need to copy pcaps to a special directory. Use the file's original path directly:
 
 ```text
-Use Zeek MCP to check health.
-```
-
-```text
-Use Zeek MCP to inspect /Users/alice/Downloads/suspicious.pcap and suggest relevant detection scripts.
+Use Zeek MCP to triage /Users/alice/Downloads/suspicious.pcap.
 ```
 
 ```text
@@ -97,7 +93,7 @@ Artifacts are written under:
   manifest.json
 ```
 
-Use `get_run_manifest` when another agent needs to continue from a previous run.
+Use `manifest.json` when another agent needs to continue from a previous run.
 
 ## Troubleshooting
 
@@ -105,7 +101,7 @@ Use `get_run_manifest` when another agent needs to continue from a previous run.
 - **output_dir_unavailable**: `/outputs` is not mounted or is read-only. Ensure the output volume is writable.
 - **docker: command not found**: install Docker Desktop or Docker Engine.
 - **pull access denied**: confirm the GHCR package is public or that Docker is logged in with access.
-- **No protocol metadata from `inspect_capture`**: the slim image does not include `tshark/capinfos`; Zeek MCP falls back to Zeek logs where possible. Use `--with-pcap-tools` build for richer metadata.
+- **No protocol metadata from `triage_pcap`**: the slim image does not include `tshark/capinfos`; Zeek MCP falls back to Zeek logs where possible. Use `--with-pcap-tools` build for richer metadata.
 
 ## Alternative: Native Binary (No Docker)
 

@@ -2,16 +2,14 @@
 
 ## Pcap Triage
 
-1. Call `health_check` to confirm Zeek and path maps are available.
-2. Call `list_pcaps` and reuse a returned `path` value.
-3. Call `triage_pcap` for the default high-success flow.
-4. For manual control, call `inspect_capture`, review `protocols` and `suggested_scripts`, then run `detect_threats`.
+1. Use the `zeek://pcaps` resource to discover available pcap files.
+2. Call `triage_pcap` for the default high-success flow.
 
 Agents should report low-confidence or empty findings plainly. They should not invent malicious activity when Zeek returns no relevant evidence.
 
 For packet-level verification, pass alerts from `triage_pcap` to epan MCP (an external Wireshark-based packet analysis tool) using `epan_verify_zeek_alert`, then create evidence with `epan_create_evidence_bundle` only after narrowing the filter.
 
-When the server runs in the default Zeek-only Docker image, `inspect_capture` uses a Zeek log fallback if `tshark` and `capinfos` are unavailable. Treat fallback warnings as reduced packet-level metadata, not as a detection failure. Use `generate_logs` or `detect_threats` for deeper Zeek-native analysis.
+When the server runs in the default Zeek-only Docker image, `triage_pcap` uses Zeek's own log output for protocol metadata when `capinfos` is unavailable. Treat fallback warnings as reduced packet-level metadata, not as a detection failure. Use `summarize_logs` for deeper Zeek-native analysis.
 
 ## Intake And Artifacts
 
@@ -21,20 +19,20 @@ Every execution tool creates a persistent run directory under `/outputs/runs/<ru
 
 Use this handoff pattern for multi-agent workflows:
 
-1. Detection agent runs `detect_threats`, `generate_logs`, or `extract_files`.
-2. File-analysis agent calls `get_run_manifest` and reads artifacts where `kind=extracted_file`.
+1. Detection agent runs `triage_pcap`, `summarize_logs`, or `extract_files`.
+2. File-analysis agent reads artifacts where `kind=extracted_file`.
 3. Log-analysis agent reads artifacts where `kind=zeek_log`.
 4. Report agent writes summaries under the same run's `reports/` directory and references the original `manifest.json`.
 
 ## Artifact Cleanup
 
-Artifacts are retained by default. Use `list_runs` to review `artifact_bytes` and `total_bytes`, then use `cleanup_runs` with `dry_run=true` before deleting.
+Artifacts are retained by default. Configure automatic cleanup with `ZEEK_ARTIFACT_CLEANUP_ON_START=true` plus `ZEEK_ARTIFACT_RETENTION_DAYS` or `ZEEK_ARTIFACT_MAX_BYTES`.
 
-Actual deletion requires `dry_run=false` and `confirm=true`. Agents should never request destructive cleanup unless the user explicitly asks for it.
+Agents should never request destructive cleanup unless the user explicitly asks for it.
 
 ## Full Detection Sweep
 
-Call `detect_threats` with only `pcap_path`. The server runs all enabled detection scripts and excludes extraction scripts unless `extract_files=true`.
+Call `triage_pcap` with only `pcap_path`. The server runs all enabled detection scripts and excludes extraction scripts unless `extract_files=true`.
 
 To run several selected scripts against the same pcap in one execution, pass a `scripts` array:
 
@@ -61,7 +59,7 @@ Generated scripts should prefer Zeek framework APIs and avoid process execution,
 
 ## Log-Oriented Reasoning
 
-Use `generate_logs` when an agent needs raw behavioral context rather than a detection verdict. Useful logs include:
+Use `summarize_logs` when an agent needs raw behavioral context rather than a detection verdict. Useful logs include:
 
 - `conn`, `dns`, `http`, `ssl`, `x509`
 - `files`, `ssh`, `smtp`, `smb`, `rdp`
@@ -71,7 +69,7 @@ The tool returns compact JSON samples and field lists so agents can decide wheth
 
 ## Intel Matching
 
-Use `match_intel` with:
+Use `hunt_intel` with:
 
 ```json
 {
@@ -89,4 +87,4 @@ The tool also accepts `intel_file` for existing Zeek Intel TSV files.
 
 ## Signature Matching
 
-Use `run_signature` for simple packet or stream signatures. Prefer signatures for narrow pattern matching and Zeek scripts for stateful protocol logic.
+Use `hunt_signature` for simple packet or stream signatures. Prefer signatures for narrow pattern matching and Zeek scripts for stateful protocol logic.

@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -26,12 +29,50 @@ func (h *Handler) registerResources(s *server.MCPServer) {
 	s.AddResource(
 		mcp.NewResource("zeek://scripts/detections", "Detection Scripts",
 			mcp.WithMIMEType("application/json"),
-			mcp.WithResourceDescription("Enabled Zeek detection scripts that can be passed to detect_threats.")),
+			mcp.WithResourceDescription("Enabled Zeek detection scripts that can be passed to triage_pcap.")),
 		func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
 			resp := map[string]interface{}{
 				"scripts": h.registry.ListScripts(ListScriptsRequest{Type: ScriptTypeDetection, EnabledOnly: true}),
 			}
 			return jsonResource("zeek://scripts/detections", resp), nil
+		},
+	)
+
+	s.AddResourceTemplate(
+		mcp.NewResourceTemplate("zeek://scripts/{id}", "Script Detail",
+			mcp.WithTemplateMIMEType("application/json"),
+			mcp.WithTemplateDescription("Metadata and source for a bundled Zeek script. Replace {id} with a script name or ScriptID.")),
+		func (ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+			scriptName := strings.TrimPrefix(request.Params.URI, "zeek://scripts/")
+			if scriptName == "" || scriptName == request.Params.URI {
+				return nil, fmt.Errorf("script id is required")
+			}
+			meta := h.registry.GetScript(scriptName)
+			if meta == nil {
+				return nil, fmt.Errorf("script not found: %s", scriptName)
+			}
+			resp := map[string]interface{}{
+				"name":         meta.Name,
+				"script_id":    meta.ScriptID,
+				"type":         meta.Type,
+				"category":     meta.Category,
+				"description":  meta.Description,
+				"signature":    meta.Signature,
+				"notice_types": meta.NoticeTypes,
+				"file_path":    meta.FilePath,
+				"size":         meta.Size,
+				"checksum":     meta.Checksum,
+				"updated_at":   meta.UpdatedAt,
+				"enabled":      meta.Enabled,
+				"valid":        meta.Valid,
+			}
+			if meta.Error != "" {
+				resp["error"] = meta.Error
+			}
+			if data, err := os.ReadFile(meta.FilePath); err == nil {
+				resp["source"] = string(data)
+			}
+			return jsonResource(fmt.Sprintf("zeek://scripts/%s", scriptName), resp), nil
 		},
 	)
 
