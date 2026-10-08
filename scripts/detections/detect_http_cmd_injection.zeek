@@ -1,10 +1,20 @@
-# ScriptID: DETECT_HTTP_CMD_INJECT_v1
-# Type: detection
-# Category: web_attack
-# Description: Detect Shellshock and Unix command-injection payloads in HTTP URIs and headers.
-# Signature: HTTP parameters or headers contain shell metacharacters, command names, sensitive file reads, or Shellshock payloads.
+# SCRIPT_ID: DETECT_HTTP_CMD_INJECT_v1
 # NoticeTypes: UnixCommand::UnixCommandInjection
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: web
+# PackVersion: 2.0.0
+# Severity: high
+# Confidence: 0.80
+# Protocols: http
+# ATT&CK: T1190
+# RequiredLogs: http
+# FalsePositives: 安全测试、代码示例和经过编码的合法参数可能包含命令关键字。
+
+# 恶意行为检测脚本配置
+# 行为类型：Unix命令注入攻击
+# 行为分类：Web攻击/命令执行
+# 行为描述：检测HTTP URI及Header中包含的Shellshock及常见Unix系统命令特征
+# 攻击特征：HTTP参数或请求头中出现Shellshock、系统命令、命令连接符、敏感文件读取等注入载荷
 
 @load base/frameworks/notice
 @load base/protocols/http
@@ -31,7 +41,7 @@ function check_injection(c: connection, value: string, source_type: string) {
         if (sig$regex in value) {
             NOTICE([
                 $note = UnixCommandInjection,
-                $msg = fmt("Unix command-injection attempt detected in %s (signature: %s)", source_type, sig$name),
+                $msg = fmt("检测到 Unix 命令注入尝试: %s (签名: %s)", source_type, sig$name),
                 $sub = fmt("Payload: %s", value),
                 $conn = c,
                 $uid = c$uid

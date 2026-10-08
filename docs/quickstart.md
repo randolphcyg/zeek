@@ -101,17 +101,17 @@ Use `manifest.json` when another agent needs to continue from a previous run.
 - **output_dir_unavailable**: `/outputs` is not mounted or is read-only. Ensure the output volume is writable.
 - **docker: command not found**: install Docker Desktop or Docker Engine.
 - **pull access denied**: confirm the GHCR package is public or that Docker is logged in with access.
-- **No protocol metadata from `triage_pcap`**: the slim image does not include `tshark/capinfos`; Zeek MCP falls back to Zeek logs where possible. Use `--with-pcap-tools` build for richer metadata.
+- **No protocol metadata from `analyze_pcap`**: the slim image does not include `tshark/capinfos`; Zeek MCP falls back to Zeek logs where possible. Use `--with-pcap-tools` build for richer metadata.
 
 ## Alternative: Native Binary (No Docker)
 
-If Zeek is installed on your host, run `zeek` directly. Any filesystem path is accessible with zero configuration:
+If Zeek is installed on your host, run `zeek-mcp` directly. Any filesystem path is accessible with zero configuration:
 
 ```json
 {
   "mcpServers": {
     "zeek": {
-      "command": "/path/to/zeek",
+      "command": "/path/to/zeek-mcp",
       "args": [
         "--base-dir", "/path/to/zeek_project",
         "--scripts-dir", "/path/to/zeek_project/scripts"

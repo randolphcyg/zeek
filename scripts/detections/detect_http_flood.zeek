@@ -1,10 +1,20 @@
-# ScriptID: DETECT_HTTP_FLOOD_v1
-# Type: detection
-# Category: dos
-# Description: Detect high-rate HTTP requests that may indicate CC or HTTP DoS activity.
-# Signature: A source exceeds the configured HTTP request threshold within the configured interval.
+# SCRIPT_ID: DETECT_HTTP_FLOOD_v1
 # NoticeTypes: HTTP_DoS::HTTP_CC_Attack
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: web
+# PackVersion: 2.0.0
+# Severity: high
+# Confidence: 0.65
+# Protocols: http
+# ATT&CK: T1499
+# RequiredLogs: http
+# FalsePositives: 压力测试、爬虫和高并发 API 客户端可能超过阈值。
+
+# 恶意行为检测脚本配置
+# 行为类型：HTTP拒绝服务攻击(CC攻击)
+# 行为分类：拒绝服务攻击
+# 行为描述：检测高频HTTP请求，基于短时间内的请求计数统计
+# 攻击特征：同一源地址或目标在短时间窗口内出现超阈值HTTP请求频率，疑似CC压测或拒绝服务攻击
 
 @load base/frameworks/notice
 @load base/frameworks/sumstats
@@ -26,7 +36,7 @@ event zeek_init() {
         $threshold_crossed(key: SumStats::Key, result: SumStats::Result) = {
             NOTICE([
                 $note = HTTP_CC_Attack,
-                $msg = fmt("HTTP CC/DoS activity detected: source %s sent %.0f requests in a short window", key$host, result["http.flood"]$sum),
+                $msg = fmt("检测到 HTTP CC/DoS 攻击: 源IP %s 在短时间内发送了 %.0f 次请求", key$host, result["http.flood"]$sum),
                 $src = key$host
             ]);
         }

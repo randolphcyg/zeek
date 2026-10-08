@@ -44,6 +44,7 @@ type ArtifactManifest struct {
 	RequestedPcapPath string          `json:"requested_pcap_path,omitempty"`
 	ResolvedPcapPath  string          `json:"resolved_pcap_path,omitempty"`
 	ZeekVersion       string          `json:"zeek_version,omitempty"`
+	ZeekCompatibility string          `json:"zeek_compatibility,omitempty"`
 	Status            string          `json:"status"`
 	Artifacts         []Artifact      `json:"artifacts"`
 	ArtifactBytes     int64           `json:"artifact_bytes"`

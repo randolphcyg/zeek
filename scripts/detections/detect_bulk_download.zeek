@@ -1,10 +1,20 @@
-# ScriptID: DETECT_BULK_DOWNLOAD_v1
-# Type: detection
-# Category: file_download
-# Description: Detect high-frequency or high-volume downloads of firmware, executable, archive, or other sensitive file types.
-# Signature: A source downloads many watched file types or a large response byte volume in a short window.
+# SCRIPT_ID: DETECT_BULK_DOWNLOAD_v1
 # NoticeTypes: BulkDownload::Bulk_File_Download, BulkDownload::High_Volume_Download
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: web
+# PackVersion: 2.0.0
+# Severity: medium
+# Confidence: 0.65
+# Protocols: http, files
+# ATT&CK: T1105
+# RequiredLogs: http, files
+# FalsePositives: 软件仓库、补丁分发和固件镜像站会产生批量下载。
+
+# 恶意行为检测脚本配置
+# 行为类型：批量下载恶意文件
+# 行为分类：恶意文件获取
+# 行为描述：检测单IP短时间内高频下载文件，尤其固件/可执行文件
+# 攻击特征：同一源地址短时间内连续下载大量可执行文件、固件、压缩包等高风险文件
 
 @load base/frameworks/notice
 @load base/frameworks/sumstats
@@ -14,25 +24,28 @@ module BulkDownload;
 
 export {
     redef enum Notice::Type += {
-        # File extraction policy.
+        ## 当短时间内下载大量特定文件时触发
         Bulk_File_Download,
-        # Script configuration.
+        ## 当短时间内产生极大下载流量时触发
         High_Volume_Download
     };
 
-    # File extraction policy.
+    ## 触发【文件数量】告警的阈值 (例如 50 个文件)
     const file_count_threshold: double = 50.0 &redef;
 
-    # Tunable threshold for offline analysis.
+    ## 触发【流量大小】告警的字节数阈值 (例如 100MB = 100 * 1024 * 1024 字节)
     const byte_count_threshold: double = 104857600.0 &redef;
 
-    # Tunable threshold for offline analysis.
+    ## 检测的时间窗口 (在分析 pcap 时，Zeek 会自动使用 pcap 的时间戳)
     const observation_window: interval = 5 mins &redef;
 
-    # File extraction policy.
-    # Script configuration.
-    # File extraction policy.
+    ## 关注的下载文件 MIME 类型集合。
+    ## 过滤掉常见的网页图片/JS/CSS，只关注有"批量下载"风险的数据类型。
+    ## 如果想统计所有类型文件，可以将这个 set 清空。
     const watch_mime_types: set[string] = {
+        "application/octet-stream",
+        "application/x-firmware",
+        "application/x-binary",
         "application/pdf",
         "application/zip",
         "application/x-dosexec",
@@ -45,7 +58,7 @@ export {
 
 event zeek_init()
     {
-    # File extraction policy.
+    # ---------------- 1. 文件数量检测模块 ----------------
     local r_files: SumStats::Reducer = [$stream="bulk.download.files", $apply=set(SumStats::SUM)];
     SumStats::create([$name="detect_bulk_files",
                       $epoch=observation_window,
@@ -57,13 +70,13 @@ event zeek_init()
                       $threshold=file_count_threshold,
                       $threshold_crossed(key: SumStats::Key, result: SumStats::Result) =
                           {
-                          local msg = fmt("Host %s downloaded sensitive files within %s: %.0f files", key$host, observation_window, result["bulk.download.files"]$sum);
+                          local msg = fmt("主机 %s 在 %s 内下载了 %.0f 个敏感类型文件", key$host, observation_window, result["bulk.download.files"]$sum);
                           NOTICE([$note=Bulk_File_Download,
                                   $msg=msg,
                                   $src=key$host]);
                           }]);
 
-    # Detection logic.
+    # ---------------- 2. 流量大小检测模块 ----------------
     local r_bytes: SumStats::Reducer = [$stream="bulk.download.bytes", $apply=set(SumStats::SUM)];
     SumStats::create([$name="detect_bulk_bytes",
                       $epoch=observation_window,
@@ -75,45 +88,45 @@ event zeek_init()
                       $threshold=byte_count_threshold,
                       $threshold_crossed(key: SumStats::Key, result: SumStats::Result) =
                           {
-                          local msg = fmt("Host %s downloaded data within %s: %.2f MB", key$host, observation_window, result["bulk.download.bytes"]$sum / 1048576.0);
+                          local msg = fmt("主机 %s 在 %s 内下载了 %.2f MB 数据", key$host, observation_window, result["bulk.download.bytes"]$sum / 1048576.0);
                           NOTICE([$note=High_Volume_Download,
                                   $msg=msg,
                                   $src=key$host]);
                           }]);
     }
 
-# Detection logic.
+# 事件: 连接状态移除 (用于统计下载的字节数)
 event connection_state_remove(c: connection)
     {
-    # Script configuration.
+    # c$resp$size 表示响应方(服务器)发送给发起方(客户端)的 payload 数据大小
     if ( c$resp$size > 0 )
         {
-        # Script configuration.
+        # 将流量归属于发起连接的主机 (通常是下载者)
         SumStats::observe("bulk.download.bytes", [$host=c$id$orig_h], [$num=c$resp$size]);
         }
     }
 
-# File extraction policy.
+# 事件: 文件状态移除 (用于统计下载的文件数量)
 event file_state_remove(f: fa_file)
     {
     if ( ! f?$info ) return;
 
-    # File extraction policy.
-    # Script configuration.
+    # 如果定义了关注的 MIME 类型，则进行过滤。
+    # 这可以防止用户正常打开一个包含上百张图片的网页时触发告警。
     if ( f$info?$mime_type && |watch_mime_types| > 0 && f$info$mime_type !in watch_mime_types )
         return;
 
-    # File extraction policy.
+    # 在 Zeek 8.x 中，通过遍历传输该文件的所有网络连接来提取下载者 IP
     local downloaders: set[addr];
 
-    # File extraction policy.
+    # f$conns 是一个记录了所有传输该文件的连接表 (table[conn_id] of connection)
     for ( cid, c in f$conns )
         {
-        # Script configuration.
+        # 通常情况下，发起网络请求的一端 (orig_h，即客户端) 就是下载者
         add downloaders[c$id$orig_h];
         }
 
-    # Tunable threshold for offline analysis.
+    # 遍历去重后的下载者 IP，并上报给 SumStats 进行阈值统计
     for ( rx in downloaders )
         {
         SumStats::observe("bulk.download.files", [$host=rx], [$num=1]);

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -155,7 +156,7 @@ func (h *Handler) handleSyntaxCheck(ctx context.Context, request mcp.CallToolReq
 		defer cleanup()
 	}
 
-	cmd := exec.CommandContext(ctx, "zeek", "--parse-only", inputPath)
+	cmd := exec.CommandContext(ctx, h.executor.config.ZeekBinary, "--parse-only", inputPath)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
@@ -180,8 +181,12 @@ func (h *Handler) handleSyntaxCheck(ctx context.Context, request mcp.CallToolReq
 }
 
 
-func getZeekVersion(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "zeek", "--version")
+func getZeekVersion(ctx context.Context, zeekBinary string) (string, error) {
+	binary := zeekBinary
+	if binary == "" {
+		binary = envOrDefault("ZEEK_BINARY", "zeek")
+	}
+	cmd := exec.CommandContext(ctx, binary, "--version")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err
@@ -189,19 +194,43 @@ func getZeekVersion(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
+var zeekVersionPattern = regexp.MustCompile(`(?i)zeek\s+version\s+(\S+)`)
+
+func extractZeekVersionNumber(runtimeVersion string) string {
+	match := zeekVersionPattern.FindStringSubmatch(runtimeVersion)
+	if len(match) < 2 {
+		return ""
+	}
+	return match[1]
+}
+
+func sameZeekLTSLine(a, b string) bool {
+	prefix := func(v string) string {
+		parts := strings.Split(v, ".")
+		if len(parts) < 2 {
+			return v
+		}
+		return parts[0] + "." + parts[1]
+	}
+	return prefix(a) != "" && prefix(a) == prefix(b)
+}
+
 func zeekCompatibility(runtimeVersion string) (string, []string) {
 	if runtimeVersion == "" {
 		return "unknown", []string{"Zeek runtime version is unavailable"}
 	}
-	targetPrefix := "zeek version " + strings.TrimSuffix(TargetZeekLTS, ".8")
-	if strings.Contains(runtimeVersion, "zeek version "+TargetZeekLTS) {
+	runtimeVer := extractZeekVersionNumber(runtimeVersion)
+	if runtimeVer == "" {
+		return "unknown", []string{fmt.Sprintf("unable to parse Zeek version from %q", runtimeVersion)}
+	}
+	if runtimeVer == TargetZeekLTS {
 		return "target_lts", nil
 	}
-	if strings.Contains(runtimeVersion, targetPrefix) {
+	if sameZeekLTSLine(runtimeVer, TargetZeekLTS) {
 		return "same_lts_line", nil
 	}
 	return "runtime_differs_from_target_lts", []string{
-		fmt.Sprintf("This project targets Zeek %s LTS; runtime reports %q. Validate release builds in the Zeek %s container.", TargetZeekLTS, runtimeVersion, TargetZeekLTS),
+		fmt.Sprintf("This project targets Zeek %s LTS; runtime reports %q. Validate release builds in the Zeek %s container.", TargetZeekLTS, runtimeVer, TargetZeekLTS),
 	}
 }
 
@@ -264,7 +293,15 @@ func (h *Handler) finalizeArtifactRun(ctx context.Context, result *ExecutionResu
 	artifactBytes := artifactBytes(result.Artifacts)
 	retention := retentionInfo(artifactRun.CreatedAt)
 
-	zeekVersion, _ := getZeekVersion(ctx)
+	zeekVersion, zeekVersionErr := getZeekVersion(ctx, h.executor.config.ZeekBinary)
+	zeekCompat := ""
+	if zeekVersionErr != nil {
+		result.Warnings = append(result.Warnings, "zeek version unavailable: "+zeekVersionErr.Error())
+	} else {
+		var compatWarnings []string
+		zeekCompat, compatWarnings = zeekCompatibility(zeekVersion)
+		result.Warnings = append(result.Warnings, compatWarnings...)
+	}
 	manifest := ArtifactManifest{
 		RunID:             artifactRun.RunID,
 		CreatedAt:         artifactRun.CreatedAt,
@@ -272,6 +309,7 @@ func (h *Handler) finalizeArtifactRun(ctx context.Context, result *ExecutionResu
 		RequestedPcapPath: result.RequestedPath,
 		ResolvedPcapPath:  result.ResolvedPath,
 		ZeekVersion:       zeekVersion,
+		ZeekCompatibility: zeekCompat,
 		Status:            result.Status,
 		Artifacts:         result.Artifacts,
 		ArtifactBytes:     artifactBytes,

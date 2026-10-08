@@ -1,10 +1,20 @@
-# ScriptID: DETECT_DNS_FLOOD_v1
-# Type: detection
-# Category: dos
-# Description: Detect DNS query floods, response floods, and ANY-query amplification patterns.
-# Signature: High-rate DNS requests or responses, including concentrated ANY queries.
+# SCRIPT_ID: DETECT_DNS_FLOOD_v1
 # NoticeTypes: DNS_DDoS::DNS_Query_Flood, DNS_DDoS::DNS_Response_Flood, DNS_DDoS::DNS_Amplification_ANY
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: core
+# PackVersion: 2.0.0
+# Severity: high
+# Confidence: 0.70
+# Protocols: dns
+# ATT&CK: T1498
+# RequiredLogs: dns
+# FalsePositives: 高并发递归解析器、压力测试和缓存失效可能触发阈值。
+
+# 恶意行为检测脚本配置
+# 行为类型：DNS洪水攻击/放大攻击
+# 行为分类：拒绝服务攻击(DoS)
+# 行为描述：检测高频DNS查询、响应风暴及ANY类型放大攻击特征
+# 攻击特征：高频DNS查询或响应集中爆发，包含ANY查询放大、响应风暴等拒绝服务流量形态
 
 @load base/frameworks/notice
 @load base/frameworks/sumstats
@@ -25,7 +35,7 @@ event zeek_init() {
         $name="dns-req-flood", $epoch=CHECK_INTERVAL, $reducers=set(r1), $threshold=FLOOD_THRESHOLD,
         $threshold_val(key: SumStats::Key, result: SumStats::Result): double = { return result["dns.req.flood"]$sum; },
         $threshold_crossed(key: SumStats::Key, result: SumStats::Result) = {
-            NOTICE([$note=DNS_Query_Flood, $msg=fmt("DNS query flood detected: source %s sent %.0f queries", key$host, result["dns.req.flood"]$sum), $src=key$host]);
+            NOTICE([$note=DNS_Query_Flood, $msg=fmt("检测到 DNS 查询洪水: 源IP %s 发送了 %.0f 次查询", key$host, result["dns.req.flood"]$sum), $src=key$host]);
         }
     ]);
 
@@ -34,7 +44,7 @@ event zeek_init() {
         $name="dns-resp-flood", $epoch=CHECK_INTERVAL, $reducers=set(r2), $threshold=FLOOD_THRESHOLD,
         $threshold_val(key: SumStats::Key, result: SumStats::Result): double = { return result["dns.resp.flood"]$sum; },
         $threshold_crossed(key: SumStats::Key, result: SumStats::Result) = {
-            NOTICE([$note=DNS_Response_Flood, $msg=fmt("DNS response flood detected: host %s received %.0f responses", key$host, result["dns.resp.flood"]$sum), $src=key$host]);
+            NOTICE([$note=DNS_Response_Flood, $msg=fmt("检测到 DNS 响应洪水: 目标IP %s 收到了 %.0f 次响应", key$host, result["dns.resp.flood"]$sum), $src=key$host]);
         }
     ]);
 
@@ -43,7 +53,7 @@ event zeek_init() {
         $name="dns-any-detect", $epoch=CHECK_INTERVAL, $reducers=set(r3), $threshold=ANY_THRESHOLD,
         $threshold_val(key: SumStats::Key, result: SumStats::Result): double = { return result["dns.amp.any"]$sum; },
         $threshold_crossed(key: SumStats::Key, result: SumStats::Result) = {
-            NOTICE([$note=DNS_Amplification_ANY, $msg=fmt("DNS amplification pattern detected (ANY query): source %s", key$host), $src=key$host]);
+            NOTICE([$note=DNS_Amplification_ANY, $msg=fmt("检测到 DNS 放大攻击特征 (ANY): 源IP %s", key$host), $src=key$host]);
         }
     ]);
 }

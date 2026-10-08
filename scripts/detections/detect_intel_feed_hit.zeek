@@ -1,9 +1,19 @@
-# ScriptID: DETECT_INTEL_FEED_HIT_v3
-# Type: detection
-# Category: threat_intel
-# Description: Marker script for threat-intelligence validation workflows.
-# Signature: Traffic entities match supplied malicious IP, domain, URL, or file-hash indicators.
-# Enabled: true
+# SCRIPT_ID: DETECT_INTEL_FEED_HIT_v3
+# RuleVersion: 3.0.0
+# DetectionPack: core
+# PackVersion: 2.0.0
+# Severity: medium
+# Confidence: 0.60
+# Protocols: conn, dns, http
+# RequiredLogs: conn, dns, http
+# FalsePositives: 过期、宽泛或上下文不足的情报指标可能产生误报。
+# BatchMode: disabled
+
+# 恶意行为检测脚本配置
+# 行为类型：威胁情报命中
+# 行为分类：情报验证
+# 行为描述：基于离线威胁情报回放逻辑检测流量中命中的恶意IP、域名或URL指标
+# 攻击特征：流量实体与威胁情报中的恶意IP、域名、URL或文件哈希指标发生匹配
 
 event zeek_init()
 	{

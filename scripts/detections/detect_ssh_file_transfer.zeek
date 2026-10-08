@@ -1,10 +1,20 @@
-# ScriptID: DETECT_SSH_FILE_TRANSFER_v1
-# Type: detection
-# Category: data_exfiltration
-# Description: Detect unusually large one-way data transfer over authenticated SSH sessions.
-# Signature: An authenticated SSH connection transfers more than the configured byte threshold in one direction.
+# SCRIPT_ID: DETECT_SSH_FILE_TRANSFER_v1
 # NoticeTypes: SSH_SCP::Suspicious_SCP_Transfer
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: enterprise
+# PackVersion: 2.0.0
+# Severity: medium
+# Confidence: 0.55
+# Protocols: ssh
+# ATT&CK: T1048
+# RequiredLogs: ssh, conn
+# FalsePositives: 备份、制品分发和管理员大文件传输可能表现为单向大流量。
+
+# 恶意行为检测脚本配置
+# 行为类型：SSH异常大文件传输(SCP/SFTP)
+# 行为分类：数据泄露/流量异常
+# 行为描述：检测已认证SSH连接中的异常单向大数据流，识别疑似数据窃取行为
+# 攻击特征：已认证SSH会话中出现超过阈值的单向大流量传输，疑似SCP/SFTP数据外传
 
 @load base/frameworks/notice
 @load base/protocols/ssh
@@ -51,7 +61,7 @@ event connection_state_remove(c: connection) {
     if ( is_suspicious ) {
         NOTICE([
             $note = Suspicious_SCP_Transfer,
-            $msg = fmt("Large SSH data transfer detected, possible SCP/SFTP: %s", direction),
+            $msg = fmt("检测到 SSH 隧道内的大文件传输 (疑似 SCP/SFTP): %s", direction),
             $sub = fmt("Size: %.2f MB, Threshold: %d Bytes", size_mb, TRANSFER_THRESHOLD),
             $src = c$id$orig_h,
             $dst = c$id$resp_h,

@@ -1,10 +1,19 @@
-# ScriptID: DETECT_ANOMALOUS_TRAFFIC_v1
-# Type: detection
-# Category: traffic_anomaly
-# Description: Detect hosts with unusually high byte volume or connection volume in offline traffic.
-# Signature: A host exceeds byte or connection thresholds within the capture window.
+# SCRIPT_ID: DETECT_ANOMALOUS_TRAFFIC_v1
 # NoticeTypes: AnomalousTraffic::Anomalous_Traffic_Detected
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: core
+# PackVersion: 2.0.0
+# Severity: medium
+# Confidence: 0.60
+# Protocols: conn
+# RequiredLogs: conn
+# FalsePositives: 大文件备份、镜像同步和合法批处理会产生相似流量。
+
+# 恶意行为检测脚本配置
+# 行为类型：异常网络流量
+# 行为分类：网络异常
+# 行为描述：检测单主机在离线流量包中的异常大流量传输
+# 攻击特征：单主机短时间内产生超阈值字节数或连接量，呈现异常突增的大流量传输模式
 
 @load base/frameworks/notice
 
@@ -12,11 +21,11 @@ module AnomalousTraffic;
 
 export {
     redef enum Notice::Type += {
-        # Detection logic.
+        ## 当检测到异常网络流量时触发
         Anomalous_Traffic_Detected
     };
 
-    # Tunable threshold for offline analysis.
+    ## 单源主机累计传输阈值，默认 4MB；生产环境可按场景调大
     const traffic_threshold: count = 4 * 1024 * 1024 &redef;
 }
 
@@ -36,7 +45,7 @@ event connection_state_remove(c: connection)
         return;
 
     NOTICE([$note=Anomalous_Traffic_Detected,
-            $msg=fmt("Anomalous traffic detected: host %s transferred %.2f MB", c$id$orig_h, ip_traffic[c$id$orig_h] / 1048576.0),
+            $msg=fmt("检测到异常网络流量: 主机 %s 累计传输 %.2f MB", c$id$orig_h, ip_traffic[c$id$orig_h] / 1048576.0),
             $src=c$id$orig_h,
             $conn=c,
             $uid=c$uid]);
@@ -51,7 +60,7 @@ event zeek_done()
             next;
 
         NOTICE([$note=Anomalous_Traffic_Detected,
-                $msg=fmt("Anomalous traffic detected: host %s transferred %.2f MB", ip, ip_traffic[ip] / 1048576.0),
+                $msg=fmt("检测到异常网络流量: 主机 %s 累计传输 %.2f MB", ip, ip_traffic[ip] / 1048576.0),
                 $src=ip]);
         add alerted_hosts[ip];
         }

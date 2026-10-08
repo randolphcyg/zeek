@@ -1,8 +1,8 @@
 module zeek
 
-go 1.26.4
+go 1.26.8
 
-require github.com/mark3labs/mcp-go v0.54.1
+require github.com/mark3labs/mcp-go v1.1.1
 
 require (
 	github.com/google/jsonschema-go v0.4.2 // indirect

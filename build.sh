@@ -3,7 +3,7 @@ set -e
 
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-DEFAULT_VERSION="1.0.0"
+DEFAULT_VERSION="2.0.0"
 OUTPUT_DIR="bin"
 
 print_usage() {
@@ -88,10 +88,14 @@ LDFLAGS="-X main.Version=$VERSION -X main.BuildTime=$BUILD_TIME -X main.GitCommi
 if [[ $BUILD_SERVER == true ]]; then
     echo ""
     echo "Building MCP Server..."
-    CGO_ENABLED=0 go build -v -trimpath -o "$OUTPUT_DIR/zeek" \
+    CGO_ENABLED=0 go build -v -trimpath -o "$OUTPUT_DIR/zeek-mcp" \
         -ldflags "$LDFLAGS" \
         .
-    echo "MCP Server: $OUTPUT_DIR/zeek"
+    CGO_ENABLED=0 go build -v -trimpath -o "$OUTPUT_DIR/zeek-pcap" \
+        -ldflags "$LDFLAGS" \
+        .
+    echo "MCP Server: $OUTPUT_DIR/zeek-mcp"
+    echo "CLI: $OUTPUT_DIR/zeek-pcap"
 fi
 
 if [[ $BUILD_DOCKER == true ]]; then

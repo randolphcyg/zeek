@@ -1,6 +1,6 @@
-ARG ZEEK_VER=8.0.8
+ARG ZEEK_VER=9.0.0
 ARG ZEEK_IMAGE=public.ecr.aws/zeek/zeek
-ARG GO_VER=1.26.4-alpine
+ARG GO_VER=1.26.8-alpine
 ARG WITH_PCAP_TOOLS=false
 
 ARG VERSION=dev
@@ -18,7 +18,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" -o zeek .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" -o zeek-mcp .
 
 FROM ${ZEEK_IMAGE}:${ZEEK_VER}
 ARG WITH_PCAP_TOOLS
@@ -33,10 +33,10 @@ RUN apt-get -o Acquire::Retries=3 update && \
     ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-COPY --from=go-builder /app/zeek /app/zeek
+COPY --from=go-builder /app/zeek-mcp /app/zeek-mcp
 COPY --from=go-builder /app/scripts /app/scripts/
 
 WORKDIR /app
-ENTRYPOINT ["/app/zeek"]
+ENTRYPOINT ["/app/zeek-mcp"]
 CMD ["--transport", "http", "--listen", ":8001", "--endpoint", "/mcp", "--base-dir", "/app", "--scripts-dir", "/app/scripts", "--path-map", "/pcaps=/pcaps"]
 EXPOSE 8001

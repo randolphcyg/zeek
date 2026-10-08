@@ -3,13 +3,13 @@
 ## Pcap Triage
 
 1. Use the `zeek://pcaps` resource to discover available pcap files.
-2. Call `triage_pcap` for the default high-success flow.
+2. Call `analyze_pcap` for the default high-success flow.
 
 Agents should report low-confidence or empty findings plainly. They should not invent malicious activity when Zeek returns no relevant evidence.
 
-For packet-level verification, pass alerts from `triage_pcap` to epan MCP (an external Wireshark-based packet analysis tool) using `epan_verify_zeek_alert`, then create evidence with `epan_create_evidence_bundle` only after narrowing the filter.
+For packet-level verification, pass alerts from `analyze_pcap` to epan MCP (an external Wireshark-based packet analysis tool) using `verify_zeek_alert`, then create evidence with `build_evidence` only after narrowing the filter.
 
-When the server runs in the default Zeek-only Docker image, `triage_pcap` uses Zeek's own log output for protocol metadata when `capinfos` is unavailable. Treat fallback warnings as reduced packet-level metadata, not as a detection failure. Use `summarize_logs` for deeper Zeek-native analysis.
+When the server runs in the default Zeek-only Docker image, `analyze_pcap` uses Zeek's own log output for protocol metadata when `capinfos` is unavailable. Treat fallback warnings as reduced packet-level metadata, not as a detection failure. Use `query_logs` for deeper Zeek-native analysis.
 
 ## Intake And Artifacts
 
@@ -19,7 +19,7 @@ Every execution tool creates a persistent run directory under `/outputs/runs/<ru
 
 Use this handoff pattern for multi-agent workflows:
 
-1. Detection agent runs `triage_pcap`, `summarize_logs`, or `extract_files`.
+1. Detection agent runs `analyze_pcap`, `query_logs`, or `extract_files`.
 2. File-analysis agent reads artifacts where `kind=extracted_file`.
 3. Log-analysis agent reads artifacts where `kind=zeek_log`.
 4. Report agent writes summaries under the same run's `reports/` directory and references the original `manifest.json`.
@@ -32,20 +32,16 @@ Agents should never request destructive cleanup unless the user explicitly asks 
 
 ## Full Detection Sweep
 
-Call `triage_pcap` with only `pcap_path`. The server runs all enabled detection scripts and excludes extraction scripts unless `extract_files=true`.
-
-To run several selected scripts against the same pcap in one execution, pass a `scripts` array:
+Call `analyze_pcap` with `profile=full` to run every enabled detection script. Extraction scripts still run only when `extract_files=true`:
 
 ```json
 {
   "pcap_path": "/pcaps/sample.pcap",
-  "scripts": [
-    "detect_dns_flood",
-    "detect_syn_flood",
-    "detect_http_suspicious_ua"
-  ]
+  "profile": "full"
 }
 ```
+
+Use `profile=standard` to run only the protocol-relevant subset of detections, or the default `baseline` for a protocol-logs-only preflight pass.
 
 ## File Extraction
 
@@ -59,13 +55,13 @@ Generated scripts should prefer Zeek framework APIs and avoid process execution,
 
 ## Log-Oriented Reasoning
 
-Use `summarize_logs` when an agent needs raw behavioral context rather than a detection verdict. Useful logs include:
+Use `query_logs` against an existing `analyze_pcap` run when an agent needs raw behavioral context rather than a detection verdict. It reads persisted JSON logs and never reparses the pcap. Useful logs include:
 
 - `conn`, `dns`, `http`, `ssl`, `x509`
 - `files`, `ssh`, `smtp`, `smb`, `rdp`
 - `tunnel`, `weird`, `notice`, `analyzer`
 
-The tool returns compact JSON samples and field lists so agents can decide whether a custom script, signature, or specific detector is appropriate.
+The tool supports `select` projection, `predicates` filtering, `aggregate`, and cursor pagination so agents can decide whether a custom script or a specific detector is appropriate.
 
 ## Intel Matching
 
@@ -84,7 +80,3 @@ Use `hunt_intel` with:
 ```
 
 The tool also accepts `intel_file` for existing Zeek Intel TSV files.
-
-## Signature Matching
-
-Use `hunt_signature` for simple packet or stream signatures. Prefer signatures for narrow pattern matching and Zeek scripts for stateful protocol logic.

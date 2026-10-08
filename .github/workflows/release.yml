@@ -16,7 +16,25 @@ permissions:
   packages: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
   docker:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -49,6 +67,30 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image for smoke verification
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: zeek-mcp-smoke:ci
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+            GIT_COMMIT=${{ steps.meta.outputs.git_commit }}
+            WITH_PCAP_TOOLS=false
+
+      - name: Smoke verify image
+        run: |
+          set -euo pipefail
+          zeek_version="$(docker run --rm --entrypoint zeek zeek-mcp-smoke:ci --version)"
+          echo "Zeek in image: ${zeek_version}"
+          echo "${zeek_version}" | grep -Eq 'version +9\.0\.' \
+            || { echo "::error::image does not run the target Zeek 9.0 LTS line"; exit 1; }
+          mcp_version="$(docker run --rm --entrypoint /app/zeek-mcp zeek-mcp-smoke:ci --version)"
+          echo "zeek-mcp in image: ${mcp_version}"
 
       - name: Build and push
         uses: docker/build-push-action@v6

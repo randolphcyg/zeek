@@ -25,6 +25,9 @@ func (p *pathMapFlags) Set(value string) error {
 }
 
 func main() {
+	if len(os.Args) > 1 && isCLICommand(os.Args[1]) {
+		os.Exit(runCLI(os.Args[1], os.Args[2:]))
+	}
 	baseDir := flag.String("base-dir", "", "base directory for scripts and pcaps")
 	scriptsDir := flag.String("scripts-dir", "", "Zeek scripts directory (default: <base-dir>/scripts)")
 	transport := flag.String("transport", "stdio", "MCP transport: stdio or http")

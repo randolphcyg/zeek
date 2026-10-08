@@ -16,14 +16,15 @@ import (
 )
 
 var (
-	Version       = "1.0.0"
+	Version       = "2.0.0"
 	BuildTime     = "unknown"
 	GitCommit     = "unknown"
-	TargetZeekLTS = "8.0.8"
+	TargetZeekLTS = "9.0.0"
 )
 
 type MCPServer struct {
 	server    *server.MCPServer
+	handler   *Handler
 	registry  *ScriptRegistry
 	executor  *Executor
 	baseDir   string
@@ -37,9 +38,7 @@ func NewMCPServer(baseDir, scriptsDir string, pathMaps []PathMap) *MCPServer {
 		slog.Warn("failed to scan scripts", "error", err)
 	}
 
-	executor := NewExecutor(ExecutorConfig{
-		Timeout: 120 * time.Second,
-	})
+	executor := NewExecutor(ExecutorConfig{})
 
 	handler := &Handler{
 		registry: registry,
@@ -66,6 +65,7 @@ func NewMCPServer(baseDir, scriptsDir string, pathMaps []PathMap) *MCPServer {
 
 	return &MCPServer{
 		server:    s,
+		handler:   handler,
 		registry:  registry,
 		executor:  executor,
 		baseDir:   baseDir,
@@ -127,14 +127,12 @@ func (h *Handler) dispatchTool(ctx context.Context, request mcp.CallToolRequest)
 
 func (h *Handler) dispatchToolInner(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	switch request.Params.Name {
-	case "triage_pcap":
-		return h.handleTriagePcap(ctx, request)
-	case "summarize_logs":
-		return h.handleSummarizeLogs(ctx, request)
+	case "analyze_pcap":
+		return h.handleAnalyzePcapV2(ctx, request)
+	case "query_logs":
+		return h.handleQueryLogsV2(ctx, request)
 	case "hunt_intel":
 		return h.handleHuntIntel(ctx, request)
-	case "hunt_signature":
-		return h.handleHuntSignature(ctx, request)
 	case "extract_files":
 		return h.handleExtractFiles(ctx, request)
 	case "validate_script":
@@ -182,14 +180,26 @@ func writeToolCallLog(toolName, traceID string, input any, status, errorCode str
 }
 
 func (ms *MCPServer) logStartup(transport string) {
-	slog.Info("Zeek MCP Server starting",
+	attrs := []any{
 		"version", Version,
 		"transport", transport,
 		"scripts_loaded", len(ms.registry.ListScripts(ListScriptsRequest{})),
 		"path_maps", len(ms.paths.Mappings()),
 		"git_commit", GitCommit,
 		"build_time", BuildTime,
-	)
+		"target_zeek_lts", TargetZeekLTS,
+	}
+	if zeekVersion, err := getZeekVersion(context.Background(), ms.executor.config.ZeekBinary); err != nil {
+		slog.Warn("zeek runtime version unavailable", "error", err)
+		attrs = append(attrs, "zeek_compatibility", "unknown")
+	} else {
+		compat, warnings := zeekCompatibility(zeekVersion)
+		attrs = append(attrs, "zeek_runtime_version", zeekVersion, "zeek_compatibility", compat)
+		for _, warning := range warnings {
+			slog.Warn(warning)
+		}
+	}
+	slog.Info("Zeek MCP Server starting", attrs...)
 }
 
 func (ms *MCPServer) Run() error {

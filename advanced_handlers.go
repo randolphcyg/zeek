@@ -203,6 +203,15 @@ func textResult(text string) *mcp.CallToolResult {
 }
 
 func stringSliceArg(raw interface{}) []string {
+	if values, ok := raw.([]string); ok {
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if value != "" {
+				result = append(result, value)
+			}
+		}
+		return result
+	}
 	values, ok := raw.([]interface{})
 	if !ok {
 		return nil

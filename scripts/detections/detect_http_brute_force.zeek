@@ -1,10 +1,20 @@
-# ScriptID: DETECT_HTTP_BRUTE_FORCE_v1
-# Type: detection
-# Category: brute_force
-# Description: Detect repeated HTTP authentication failures against login endpoints.
-# Signature: A source repeatedly requests login paths and receives failure status codes within the configured window.
+# SCRIPT_ID: DETECT_HTTP_BRUTE_FORCE_v1
 # NoticeTypes: HTTPBruteForce::HTTP_Brute_Force_Detected
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: web
+# PackVersion: 2.0.0
+# Severity: medium
+# Confidence: 0.70
+# Protocols: http
+# ATT&CK: T1110
+# RequiredLogs: http
+# FalsePositives: 共享出口、健康检查或错误客户端配置可能造成连续失败。
+
+# 恶意行为检测脚本配置
+# 行为类型：HTTP暴力破解攻击
+# 行为分类：认证攻击
+# 行为描述：检测短时间内多次HTTP登录失败的暴力破解尝试
+# 攻击特征：同一来源短时间内对登录接口发起高频认证请求并产生连续失败响应
 
 @load base/protocols/http
 @load base/frameworks/notice
@@ -13,7 +23,7 @@ module HTTPBruteForce;
 
 export {
     redef enum Notice::Type += {
-        # Detection logic.
+        ## 当检测到HTTP暴力破解尝试时触发
         HTTP_Brute_Force_Detected
     };
 
@@ -79,7 +89,7 @@ event http_reply(c: connection, version: string, code: count, reason: string)
     if ( failure_info[src_ip]$failure_count >= failure_threshold && ! failure_info[src_ip]$alerted )
         {
         NOTICE([$note=HTTP_Brute_Force_Detected,
-                $msg=fmt("HTTP brute-force attempt detected: host %s had login failures within %s: %d failures, latest URL %s",
+                $msg=fmt("检测到HTTP暴力破解尝试: 主机 %s 在 %s 内登录失败 %d 次，最近目标URL %s",
                          src_ip, time_window, failure_info[src_ip]$failure_count, uri),
                 $src=src_ip,
                 $conn=c,

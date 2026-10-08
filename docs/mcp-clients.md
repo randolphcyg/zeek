@@ -1,6 +1,6 @@
 # MCP Client Configuration
 
-Docker is the default integration path. The key insight is mounting the host user directory at the **same path** inside the container, so agents can reference any pcap by its original absolute path without path mapping.
+Docker is the default integration path. Mount the host user directory at the **same path** inside the container so agents can reference any pcap by its original absolute path without path mapping.
 
 ## Prerequisites
 
@@ -39,7 +39,7 @@ mkdir "$env:USERPROFILE\zeek_outputs"
 }
 ```
 
-macOS 上所有用户文件都在 `/Users` 下，一个挂载覆盖所有 pcap 位置。
+On macOS, all user files reside under `/Users`, so one mount covers all pcap locations.
 
 ### Linux
 
@@ -65,7 +65,7 @@ macOS 上所有用户文件都在 `/Users` 下，一个挂载覆盖所有 pcap �
 }
 ```
 
-如果 pcap 文件分布在 `/home` 之外（如 `/opt`、`/var/log`、`/data`），添加对应的只读挂载：
+If pcap files are spread across directories outside `/home` (e.g., `/opt`, `/var/log`, `/data`), add the corresponding read-only mounts:
 
 ```json
 "-v", "/opt:/opt:ro",
@@ -74,7 +74,7 @@ macOS 上所有用户文件都在 `/Users` 下，一个挂载覆盖所有 pcap �
 
 ### Windows (Docker Desktop)
 
-Windows 上 Docker Desktop 使用 WSL2 后端，宿主机磁盘自动映射到 `/mnt/` 路径下。需要配合 `ZEEK_PATH_MAPS` 做 Windows 路径到 Linux 路径的转换：
+On Windows, Docker Desktop uses the WSL2 backend. Host disks are automatically mapped to `/mnt/` paths. Use `ZEEK_PATH_MAPS` to translate Windows paths to Linux paths:
 
 ```json
 {
@@ -98,57 +98,57 @@ Windows 上 Docker Desktop 使用 WSL2 后端，宿主机磁盘自动映射到 `
 }
 ```
 
-**Windows 路径说明：**
+**Windows path resolution:**
 
-| Agent 传入的路径 | 容器内解析为 | 说明 |
+| Agent path | Resolved in container | Notes |
 |---|---|---|
-| `C:\Users\alice\test.pcap` | `/Users/alice/test.pcap` | 通过 path map 转换 |
-| `C:/Users/alice/test.pcap` | `/Users/alice/test.pcap` | 通过 path map 转换 |
-| `/Users/alice/test.pcap` | `/Users/alice/test.pcap` | 直接可用 |
+| `C:\Users\alice\test.pcap` | `/Users/alice/test.pcap` | Via path map |
+| `C:/Users/alice/test.pcap` | `/Users/alice/test.pcap` | Via path map |
+| `/Users/alice/test.pcap` | `/Users/alice/test.pcap` | Direct (no conversion) |
 
-如果 pcap 在其他磁盘（如 D 盘），添加额外挂载和映射：
+If pcap files are on other drives (e.g., D:), add additional mounts and mappings:
 
 ```json
 "-v", "D:\\data:/data:ro",
 "-e", "ZEEK_PATH_MAPS=C:\\Users=/Users,C:/Users=/Users,D:\\data=/data,D:/data=/data"
 ```
 
-## 原理
+## How It Works
 
-核心思路是将宿主机用户目录以**同路径或可预测路径**方式挂载到容器内：
+The core idea is to mount the host user directory at the **same or predictable path** inside the container:
 
-| 系统 | 用户文件位置 | Docker 挂载 | 需要 PATH_MAPS |
+| OS | User files | Docker mount | Needs PATH_MAPS |
 |------|-------------|-------------|----------------|
-| macOS | `/Users/` | `-v /Users:/Users:ro` | 否 |
-| Linux | `/home/` | `-v /home:/home:ro` | 否 |
-| Windows | `C:\Users\` | `-v C:\Users:/Users:ro` | 是（路径格式转换） |
+| macOS | `/Users/` | `-v /Users:/Users:ro` | No |
+| Linux | `/home/` | `-v /home:/home:ro` | No |
+| Windows | `C:\Users\` | `-v C:\Users:/Users:ro` | Yes (format conversion) |
 
-- 只读挂载（`:ro`）确保容器无法修改宿主机文件
-- `/outputs` 挂载为可写，用于存储分析产物
-- macOS/Linux 不需要 `ZEEK_PATH_MAPS`，路径在容器内外完全一致
-- Windows 需要 path map 做 `C:\` → `/` 的前缀转换
+- Read-only mounts (`:ro`) ensure the container cannot modify host files.
+- `/outputs` is mounted writable for storing analysis artifacts.
+- macOS/Linux do not need `ZEEK_PATH_MAPS` — paths are identical inside and outside the container.
+- Windows needs path maps for `C:\` → `/` prefix conversion.
 
 ## Client-Specific Notes
 
 ### Trae
 
-在 Trae 的 MCP 设置中配置。参考 `examples/mcp/trae.json`。
+Configure in Trae's MCP settings. See `examples/mcp/trae.json`.
 
 ### Claude Desktop / Claude Code
 
-在 Claude 的 MCP 配置文件中添加。参考 `examples/mcp/claude-desktop.json`。
+Add to Claude's MCP configuration file. See `examples/mcp/claude-desktop.json`.
 
 ### Cursor / VS Code / Kiro
 
-在 `.cursor/mcp.json` 或工作区 MCP 设置中配置。参考 `examples/mcp/cursor.json`。
+Configure in `.cursor/mcp.json` or workspace MCP settings. See `examples/mcp/cursor.json`.
 
 ### Codex
 
-参考 `examples/mcp/codex.json`。
+See `examples/mcp/codex.json`.
 
 ## Usage
 
-配置完成后，agent 可以直接分析任意位置的 pcap 文件：
+After configuration, agents can analyze pcap files at any location:
 
 ```text
 Analyze /Users/alice/Downloads/suspicious.pcap with Zeek MCP
@@ -162,17 +162,17 @@ Run threat detection on /Users/alice/research/attack_sample.pcapng
 Generate Zeek logs for /home/bob/captures/network_dump.pcap
 ```
 
-Windows 用户：
+Windows users:
 
 ```text
 Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 ```
 
-无需手动拷贝文件到指定目录。
+No manual file copying is required.
 
 ## Output Artifacts
 
-执行工具在 `/outputs` 挂载下创建产物：
+Execution tools create artifacts under the `/outputs` mount:
 
 ```text
 /outputs/runs/<run_id>/
@@ -182,7 +182,7 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
   manifest.json  # Run metadata and artifact index
 ```
 
-分析产物通过 `manifest.json` 和 `zeek://runs` 资源访问。
+Analysis artifacts are accessible via `manifest.json` and the `zeek://runs` resource.
 
 ## Build Options
 
@@ -199,7 +199,7 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 
 ## Native Binary Mode
 
-如果宿主机已安装 Zeek，可以直接运行 `zeek` 二进制。此模式下任意文件系统路径均可访问，零配置：
+If Zeek is already installed on the host, run the `zeek-mcp` binary directly. Any filesystem path is accessible with zero configuration:
 
 ```bash
 ./build.sh -s
@@ -209,7 +209,7 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 {
   "mcpServers": {
     "zeek": {
-      "command": "/path/to/zeek",
+      "command": "/path/to/zeek-mcp",
       "args": [
         "--base-dir", "/path/to/zeek_project",
         "--scripts-dir", "/path/to/zeek_project/scripts"
@@ -219,7 +219,7 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 }
 ```
 
-启用自定义脚本执行（仅在可信环境中使用）：
+Enable custom script execution (sandboxed environments only):
 
 ```json
 {
@@ -231,7 +231,7 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 
 ## Legacy Configuration (Fixed Directory)
 
-如果需要限制 pcap 访问范围到特定目录，使用显式路径映射：
+To restrict pcap access to a specific directory, use explicit path mapping:
 
 ```json
 {
@@ -253,4 +253,4 @@ Analyze C:\Users\alice\Downloads\capture.pcap with Zeek MCP
 }
 ```
 
-此模式下只有映射目录内的文件可访问，agent 必须使用 `/pcaps/sample.pcap` 这样的容器内路径。
+In this mode, only files within mapped directories are accessible. Agents must use container paths like `/pcaps/sample.pcap`.

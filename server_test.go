@@ -18,10 +18,9 @@ func TestToolNamesBreakingChange(t *testing.T) {
 		seen[tool.Name] = true
 	}
 	for _, name := range []string{
-		"triage_pcap",
-		"summarize_logs",
+		"analyze_pcap",
+		"query_logs",
 		"hunt_intel",
-		"hunt_signature",
 		"extract_files",
 		"validate_script",
 	} {
@@ -30,6 +29,9 @@ func TestToolNamesBreakingChange(t *testing.T) {
 		}
 	}
 	for _, old := range []string{
+		"triage_pcap",
+		"summarize_logs",
+		"hunt_signature",
 		"zeek_health",
 		"inspect_capture",
 		"detect_threats",
@@ -191,9 +193,9 @@ func TestPathResolver(t *testing.T) {
 
 func TestPathHasPrefix(t *testing.T) {
 	tests := []struct {
-		path  string
+		path   string
 		prefix string
-		want  bool
+		want   bool
 	}{
 		{"/Users/alice/file.pcap", "/Users", true},
 		{"/Usersalice/file.pcap", "/Users", false},

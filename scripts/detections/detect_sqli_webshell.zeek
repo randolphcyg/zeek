@@ -1,10 +1,20 @@
-# ScriptID: DETECT_SQLI_WEBSHELL_v1
-# Type: detection
-# Category: web_attack
-# Description: Detect SQL injection payloads that attempt file writes or webshell placement.
-# Signature: HTTP parameters contain INTO OUTFILE, INTO DUMPFILE, UNION SELECT, or web-root script-drop patterns.
+# SCRIPT_ID: DETECT_SQLI_WEBSHELL_v1
 # NoticeTypes: Detect_SQLi_Webshell::SQLi_Write_File
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: web
+# PackVersion: 2.0.0
+# Severity: high
+# Confidence: 0.85
+# Protocols: http
+# ATT&CK: T1190
+# RequiredLogs: http
+# FalsePositives: 授权渗透测试或数据库管理接口中的示例 SQL 可能命中。
+
+# 恶意行为检测脚本配置
+# 行为类型：SQL注入写入文件
+# 行为分类：Web攻击/数据库攻击
+# 行为描述：检测利用SQL注入漏洞(INTO OUTFILE)尝试在服务器写入Webshell的高危行为
+# 攻击特征：HTTP参数中出现INTO OUTFILE、写入脚本后缀、Web目录路径等SQL注入落地Webshell载荷
 
 @load base/protocols/http
 @load base/frameworks/notice
@@ -21,7 +31,7 @@ event http_request(c: connection, method: string, original_URI: string, unescape
     if ( "into outfile" in uri || "into dumpfile" in uri ) {
         NOTICE([
             $note = SQLi_Write_File,
-            $msg = "SQL injection file-write attempt detected (possible webshell upload)",
+            $msg = "检测到 SQL 注入尝试写入文件 (Webshell Upload)",
             $sub = fmt("Payload: %s", original_URI),
             $conn = c,
             $uid = c$uid
@@ -29,7 +39,7 @@ event http_request(c: connection, method: string, original_URI: string, unescape
     } else if ( "union select" in uri ) {
         NOTICE([
             $note = SQLi_Write_File,
-            $msg = "SQL injection detected (UNION SELECT)",
+            $msg = "检测到 SQL 注入 (UNION SELECT)",
             $sub = fmt("Payload: %s", original_URI),
             $conn = c,
             $uid = c$uid

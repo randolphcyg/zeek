@@ -1,10 +1,20 @@
-# ScriptID: DETECT_HTTP_WEBSHELL_v1
-# Type: detection
-# Category: web_attack
-# Description: Detect suspicious HTTP POST or PUT file uploads with risky MIME types or script extensions.
-# Signature: HTTP uploads include PHP, JSP, executable, shell-script, or other high-risk file indicators.
+# SCRIPT_ID: DETECT_HTTP_WEBSHELL_v1
 # NoticeTypes: HTTP_Upload::Suspicious_File_Upload
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: web
+# PackVersion: 2.0.0
+# Severity: high
+# Confidence: 0.75
+# Protocols: http, files
+# ATT&CK: T1505.003
+# RequiredLogs: http, files
+# FalsePositives: 合法应用部署、主题或插件上传可能包含脚本文件。
+
+# 恶意行为检测脚本配置
+# 行为类型：HTTP恶意文件上传(Webshell)
+# 行为分类：Web攻击/权限维持
+# 行为描述：检测通过HTTP POST/PUT上传的可疑MIME类型文件或高危后缀脚本
+# 攻击特征：HTTP上传请求携带PHP、JSP、脚本、可执行文件等高危后缀或可疑MIME类型
 
 @load base/frameworks/notice
 @load base/protocols/http
@@ -48,7 +58,7 @@ event file_sniff(f: fa_file, meta: fa_metadata) {
         }
 
         if ( is_suspicious ) {
-            NOTICE([$note=Suspicious_File_Upload, $msg=fmt("Suspicious web file upload detected: %s", reason), $sub=fmt("Filename: %s", fname), $conn=c, $uid=c$uid]);
+            NOTICE([$note=Suspicious_File_Upload, $msg=fmt("检测到可疑 Web 文件上传: %s", reason), $sub=fmt("Filename: %s", fname), $conn=c, $uid=c$uid]);
             break;
         }
     }

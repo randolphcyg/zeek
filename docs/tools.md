@@ -21,9 +21,9 @@ Execution tools return:
 - `artifacts`: persisted logs and extracted files.
 - `warnings` and `errors`: execution diagnostics.
 
-## `triage_pcap`
+## `analyze_pcap`
 
-Runs the recommended Agent workflow in one call: inspect capture metadata, run bundled detection scripts, persist artifacts, and return a compact summary.
+Runs one reusable Zeek analysis pass: generate protocol logs with Community ID, optionally run detections, persist artifacts, and return a compact summary.
 
 ```json
 {
@@ -31,63 +31,62 @@ Runs the recommended Agent workflow in one call: inspect capture metadata, run b
 }
 ```
 
-Run selected scripts:
+Profiles:
 
-```json
-{
-  "pcap_path": "/pcaps/sample.pcap",
-  "scripts": [
-    "detect_dns_flood",
-    "detect_syn_flood",
-    "detect_http_suspicious_ua"
-  ]
-}
-```
+- `baseline` (default): protocol logs and Community ID only, no custom detections. Deterministic preflight pass.
+- `standard`: runs protocol-relevant detection scripts.
+- `full`: runs every enabled detection script.
 
 Run detections and file extraction together:
 
 ```json
 {
   "pcap_path": "/pcaps/sample.pcap",
+  "profile": "full",
   "extract_files": true
 }
 ```
-
-The `scripts` array accepts script names or ScriptIDs. Omit to run all enabled detection scripts.
 
 Useful fields:
 
 - `capture.protocols`
 - `alerts`
 - `alert_count`
-- `suggested_scripts`
+- `detection_coverage`
 - `run_id`
 - `manifest_path`
 - `recommended_next`
 
-## `summarize_logs`
+## `query_logs`
 
-Runs Zeek and returns compact summaries of selected logs.
+Queries persisted JSON logs from an existing `analyze_pcap` run. This never reparses the pcap.
 
 ```json
 {
-  "pcap_path": "/pcaps/sample.pcap",
-  "logs": ["conn", "dns", "http", "notice"],
-  "max_records": 20
+  "run_id": "run_20260101_120000_abcd",
+  "log": "conn",
+  "limit": 50
 }
 ```
 
-Useful logs:
+Filter and project fields:
 
-- `conn`, `dns`, `http`, `ssl`, `x509`
-- `files`, `ssh`, `smtp`, `smb`, `rdp`
-- `tunnel`, `weird`, `notice`, `analyzer`
+```json
+{
+  "run_id": "run_20260101_120000_abcd",
+  "log": "http",
+  "select": ["id.orig_h", "host", "uri"],
+  "predicates": { "status_code": "200" },
+  "aggregate": "count"
+}
+```
 
 Useful fields:
 
-- `log_summaries`
-- `log_paths`
-- `artifacts` where `kind=zeek_log`
+- `records`
+- `fields`
+- `total`
+- `cursor` for pagination (pass back as `cursor`)
 
 ## `hunt_intel`
 
@@ -111,17 +110,6 @@ Or:
 {
   "pcap_path": "/pcaps/sample.pcap",
   "intel_file": "/workspace/intel.tsv"
-}
-```
-
-## `hunt_signature`
-
-Runs Zeek signature content or a mounted signature file.
-
-```json
-{
-  "pcap_path": "/pcaps/sample.pcap",
-  "signature_content": "signature sample-sig {\\n  ip-proto == tcp\\n  event \"sample signature\"\\n}\\n"
 }
 ```
 
@@ -175,7 +163,7 @@ Use only in a sandboxed runtime.
 The server exposes these MCP resources for discovery:
 
 - `zeek://pcaps` — Available PCAP files. Returned path values are directly usable as `pcap_path`.
-- `zeek://scripts/detections` — Enabled Zeek detection scripts that can be passed to `triage_pcap`.
+- `zeek://scripts/detections` — Enabled Zeek detection scripts run by the `standard` and `full` profiles of `analyze_pcap`.
 - `zeek://scripts/{id}` — Metadata and full source for a bundled Zeek script. Replace `{id}` with a script name like `detect_dns_flood`.
 - `zeek://runs` — Recent analysis run manifests from the configured output directory.
 

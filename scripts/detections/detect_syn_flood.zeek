@@ -1,10 +1,20 @@
-# ScriptID: DETECT_SYN_FLOOD_v1
-# Type: detection
-# Category: dos
-# Description: Detect TCP SYN flood behavior based on half-open connection attempts.
-# Signature: Many SYN packets do not complete TCP handshakes within the configured interval.
+# SCRIPT_ID: DETECT_SYN_FLOOD_v1
 # NoticeTypes: SynFlood::SynFlood
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: core
+# PackVersion: 2.0.0
+# Severity: high
+# Confidence: 0.70
+# Protocols: tcp
+# ATT&CK: T1498
+# RequiredLogs: conn
+# FalsePositives: 授权端口扫描、负载均衡健康检查或丢包环境可能产生半开连接。
+
+# 恶意行为检测脚本配置
+# 行为类型：TCP SYN洪水攻击
+# 行为分类：拒绝服务攻击(DoS)
+# 行为描述：检测源IP发送大量SYN包但未建立连接的行为(Half-open connections)
+# 攻击特征：短时间内大量SYN包未完成三次握手，半开连接数量异常升高
 
 @load base/frameworks/sumstats
 @load base/frameworks/notice
@@ -28,7 +38,7 @@ event zeek_init() {
         $threshold_crossed(key: SumStats::Key, result: SumStats::Result) = {
             NOTICE([
                 $note=SynFlood,
-                $msg=fmt("SYN flood detected: source %s", key$host),
+                $msg=fmt("检测到 SYN Flood 攻击: 源 IP %s", key$host),
                 $src=key$host
             ]);
         }
@@ -37,7 +47,7 @@ event zeek_init() {
 
 event new_packet(c: connection, p: pkt_hdr) {
     if ( ! c?$id ) return;
-    # Script configuration.
+    # 检查是否为 TCP SYN 包 (Flags: SYN=1, ACK=0)
     if ( p?$tcp && p$tcp$flags == 2 ) {
         SumStats::observe("syn.flood", SumStats::Key($host=c$id$orig_h), SumStats::Observation($num=1));
     }

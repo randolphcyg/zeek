@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,20 +22,30 @@ const (
 )
 
 type ScriptMeta struct {
-	Name        string   `json:"name"`
-	ScriptID    string   `json:"script_id"`
-	FilePath    string   `json:"file_path"`
-	NoticeTypes []string `json:"notice_types,omitempty"`
-	Type        string   `json:"type"`
-	Category    string   `json:"category"`
-	Description string   `json:"description"`
-	Signature   string   `json:"signature"`
-	Size        string   `json:"size"`
-	Checksum    string   `json:"checksum"`
-	UpdatedAt   string   `json:"updated_at"`
-	Enabled     bool     `json:"enabled"`
-	Valid       bool     `json:"valid"`
-	Error       string   `json:"error,omitempty"`
+	Name               string   `json:"name"`
+	ScriptID           string   `json:"script_id"`
+	FilePath           string   `json:"file_path"`
+	NoticeTypes        []string `json:"notice_types,omitempty"`
+	Type               string   `json:"type"`
+	Category           string   `json:"category"`
+	Description        string   `json:"description"`
+	Signature          string   `json:"signature"`
+	Size               string   `json:"size"`
+	Checksum           string   `json:"checksum"`
+	UpdatedAt          string   `json:"updated_at"`
+	Enabled            bool     `json:"enabled"`
+	Valid              bool     `json:"valid"`
+	Error              string   `json:"error,omitempty"`
+	RuleVersion        string   `json:"rule_version,omitempty"`
+	DetectionPack      string   `json:"detection_pack,omitempty"`
+	PackVersion        string   `json:"detection_pack_version,omitempty"`
+	Severity           string   `json:"severity,omitempty"`
+	Confidence         *float64 `json:"confidence,omitempty"`
+	Protocols          []string `json:"protocols,omitempty"`
+	AttackTechniques   []string `json:"attack_techniques,omitempty"`
+	FalsePositiveNotes string   `json:"false_positive_notes,omitempty"`
+	RequiredLogs       []string `json:"required_logs,omitempty"`
+	TestPcap           string   `json:"test_pcap,omitempty"`
 }
 
 type ScriptRegistry struct {
@@ -44,13 +55,24 @@ type ScriptRegistry struct {
 }
 
 var (
-	reScriptID          = regexp.MustCompile(`^#\s*(?:ScriptID|SCRIPT_ID)\s*:\s*(.+)$`)
-	reNoticeTypes       = regexp.MustCompile(`^#\s*NoticeTypes\s*:\s*(.+)$`)
-	reType              = regexp.MustCompile(`^#\s*Type\s*:\s*(.+)$`)
-	reCategory          = regexp.MustCompile(`^#\s*Category\s*:\s*(.+)$`)
-	reDescription       = regexp.MustCompile(`^#\s*Description\s*:\s*(.+)$`)
-	reSignature         = regexp.MustCompile(`^#\s*Signature\s*:\s*(.+)$`)
-	reEnabled           = regexp.MustCompile(`^#\s*Enabled\s*:\s*(.+)$`)
+	reScriptID      = regexp.MustCompile(`^#\s*(?:ScriptID|SCRIPT_ID)\s*:\s*(.+)$`)
+	reNoticeTypes   = regexp.MustCompile(`^#\s*NoticeTypes\s*:\s*(.+)$`)
+	reType          = regexp.MustCompile(`^#\s*Type\s*:\s*(.+)$`)
+	reCategory      = regexp.MustCompile(`^#\s*Category\s*:\s*(.+)$`)
+	reDescription   = regexp.MustCompile(`^#\s*Description\s*:\s*(.+)$`)
+	reSignature     = regexp.MustCompile(`^#\s*Signature\s*:\s*(.+)$`)
+	reEnabled       = regexp.MustCompile(`^#\s*Enabled\s*:\s*(.+)$`)
+	reRuleVersion   = regexp.MustCompile(`^#\s*RuleVersion\s*:\s*(.+)$`)
+	reDetectionPack = regexp.MustCompile(`^#\s*DetectionPack\s*:\s*(.+)$`)
+	rePackVersion   = regexp.MustCompile(`^#\s*PackVersion\s*:\s*(.+)$`)
+	reSeverity      = regexp.MustCompile(`^#\s*Severity\s*:\s*(.+)$`)
+	reConfidence    = regexp.MustCompile(`^#\s*Confidence\s*:\s*(.+)$`)
+	reProtocols     = regexp.MustCompile(`^#\s*Protocols\s*:\s*(.+)$`)
+	reAttack        = regexp.MustCompile(`^#\s*ATT&CK\s*:\s*(.+)$`)
+	reFalsePositive = regexp.MustCompile(`^#\s*FalsePositives\s*:\s*(.+)$`)
+	reRequiredLogs  = regexp.MustCompile(`^#\s*RequiredLogs\s*:\s*(.+)$`)
+	reTestPcap      = regexp.MustCompile(`^#\s*TestPcap\s*:\s*(.+)$`)
+	// Legacy: Chinese metadata headers in Zeek scripts (行为类型=type, 行为分类=category, 行为描述=description, 攻击特征=signature)
 	reLegacyType        = regexp.MustCompile(`^#\s*行为类型[：:]\s*(.+)$`)
 	reLegacyCategory    = regexp.MustCompile(`^#\s*行为分类[：:]\s*(.+)$`)
 	reLegacyDescription = regexp.MustCompile(`^#\s*行为描述[：:]\s*(.+)$`)
@@ -194,6 +216,38 @@ func parseScriptMeta(filePath string, inferredType string) (*ScriptMeta, error) 
 		if m := reEnabled.FindStringSubmatch(line); m != nil {
 			meta.Enabled = parseBoolDefault(m[1], true)
 		}
+		if m := reRuleVersion.FindStringSubmatch(line); m != nil {
+			meta.RuleVersion = strings.TrimSpace(m[1])
+		}
+		if m := reDetectionPack.FindStringSubmatch(line); m != nil {
+			meta.DetectionPack = strings.TrimSpace(m[1])
+		}
+		if m := rePackVersion.FindStringSubmatch(line); m != nil {
+			meta.PackVersion = strings.TrimSpace(m[1])
+		}
+		if m := reSeverity.FindStringSubmatch(line); m != nil {
+			meta.Severity = strings.ToLower(strings.TrimSpace(m[1]))
+		}
+		if m := reConfidence.FindStringSubmatch(line); m != nil {
+			if value, err := strconv.ParseFloat(strings.TrimSpace(m[1]), 64); err == nil && value >= 0 && value <= 1 {
+				meta.Confidence = &value
+			}
+		}
+		if m := reProtocols.FindStringSubmatch(line); m != nil {
+			meta.Protocols = splitCSV(m[1])
+		}
+		if m := reAttack.FindStringSubmatch(line); m != nil {
+			meta.AttackTechniques = splitCSV(m[1])
+		}
+		if m := reFalsePositive.FindStringSubmatch(line); m != nil {
+			meta.FalsePositiveNotes = strings.TrimSpace(m[1])
+		}
+		if m := reRequiredLogs.FindStringSubmatch(line); m != nil {
+			meta.RequiredLogs = splitCSV(m[1])
+		}
+		if m := reTestPcap.FindStringSubmatch(line); m != nil {
+			meta.TestPcap = strings.TrimSpace(m[1])
+		}
 
 		if meta.Type == inferredType {
 			if m := reLegacyType.FindStringSubmatch(line); m != nil {
@@ -227,6 +281,20 @@ func parseScriptMeta(filePath string, inferredType string) (*ScriptMeta, error) 
 	}
 	if meta.Description == "" {
 		meta.Description = fmt.Sprintf("%s Zeek script", titleScriptType(meta.Type))
+	}
+	if meta.RuleVersion == "" {
+		meta.RuleVersion = "1"
+	}
+	if meta.PackVersion == "" {
+		meta.PackVersion = "1"
+	}
+	if meta.DetectionPack == "" {
+		// Never infer policy metadata from a filename or rule name. Missing
+		// metadata remains explicit and is surfaced to coverage/reporting.
+		meta.DetectionPack = "unclassified"
+	}
+	if meta.Severity == "" {
+		meta.Severity = "unknown"
 	}
 
 	return meta, nil

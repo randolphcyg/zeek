@@ -3,12 +3,15 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,6 +22,8 @@ type ExecutorConfig struct {
 }
 
 type ExecutionResult struct {
+	SchemaVersion   string                `json:"schema_version"`
+	Engine          string                `json:"engine"`
 	Tool            string                `json:"tool,omitempty"`
 	PcapPath        string                `json:"pcap_path,omitempty"`
 	RequestedPath   string                `json:"requested_path,omitempty"`
@@ -55,18 +60,44 @@ type ExecutionError struct {
 }
 
 type StandardAlert struct {
-	AlertID    string                 `json:"alert_id"`
-	Script     string                 `json:"script"`
-	Rule       string                 `json:"rule"`
-	Confidence float64                `json:"confidence"`
-	Severity   string                 `json:"severity"`
-	Timestamp  string                 `json:"timestamp"`
-	Src        EndpointInfo           `json:"src"`
-	Dst        EndpointInfo           `json:"dst"`
-	Proto      string                 `json:"proto"`
-	Evidence   map[string]interface{} `json:"evidence,omitempty"`
-	IOCs       *IOCInfo               `json:"iocs,omitempty"`
-	Msg        string                 `json:"msg"`
+	AlertID              string                 `json:"alert_id"`
+	Script               string                 `json:"script"`
+	Rule                 string                 `json:"rule"`
+	Confidence           *float64               `json:"confidence,omitempty"`
+	Severity             string                 `json:"severity"`
+	Timestamp            string                 `json:"timestamp"`
+	Src                  EndpointInfo           `json:"src"`
+	Dst                  EndpointInfo           `json:"dst"`
+	Proto                string                 `json:"proto"`
+	Evidence             map[string]interface{} `json:"evidence,omitempty"`
+	IOCs                 *IOCInfo               `json:"iocs,omitempty"`
+	Msg                  string                 `json:"msg"`
+	RuleVersion          string                 `json:"rule_version"`
+	DetectionPack        string                 `json:"detection_pack"`
+	DetectionPackVersion string                 `json:"detection_pack_version"`
+	Category             string                 `json:"category"`
+	AttackTechniques     []string               `json:"attack_techniques"`
+	ScriptChecksum       string                 `json:"script_sha256"`
+	FlowRef              FlowRefV2              `json:"flow_ref"`
+	LogLocator           LogLocatorV2           `json:"log_locator"`
+}
+
+type FlowRefV2 struct {
+	CommunityID string `json:"community_id,omitempty"`
+	ZeekUID     string `json:"zeek_uid,omitempty"`
+	SrcIP       string `json:"src_ip,omitempty"`
+	SrcPort     int    `json:"src_port,omitempty"`
+	DstIP       string `json:"dst_ip,omitempty"`
+	DstPort     int    `json:"dst_port,omitempty"`
+	Protocol    string `json:"protocol,omitempty"`
+	StartTime   string `json:"start_time,omitempty"`
+}
+
+type LogLocatorV2 struct {
+	Log          string `json:"log"`
+	Path         string `json:"path"`
+	Line         int    `json:"line"`
+	RecordSHA256 string `json:"record_sha256"`
 }
 
 type EndpointInfo struct {
@@ -82,18 +113,25 @@ type IOCInfo struct {
 }
 
 type ExtractedFile struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	Size     int64  `json:"size"`
-	MimeType string `json:"mime_type,omitempty"`
+	ID        string `json:"id"`
+	FUID      string `json:"fuid,omitempty"`
+	ZeekUID   string `json:"zeek_uid,omitempty"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+	MimeType  string `json:"mime_type,omitempty"`
+	Direction string `json:"direction,omitempty"`
+	Integrity string `json:"integrity"`
 }
 
 type LogSummary struct {
-	Path       string                   `json:"path,omitempty"`
-	Records    int                      `json:"records"`
-	Sample     []map[string]interface{} `json:"sample"`
-	FieldsSeen []string                 `json:"fields_seen,omitempty"`
+	Path            string                   `json:"path,omitempty"`
+	Records         int                      `json:"records"`
+	Sample          []map[string]interface{} `json:"sample"`
+	FieldsSeen      []string                 `json:"fields_seen,omitempty"`
+	SampleTruncated bool                     `json:"sample_truncated,omitempty"`
+	ReadError       string                   `json:"read_error,omitempty"`
 }
 
 type Executor struct {
@@ -119,28 +157,35 @@ func NewExecutor(config ExecutorConfig) *Executor {
 }
 
 // WithTimeout returns a copy of the Executor with a different timeout.
+// The concurrency semaphore is shared with the parent so derived executors
+// still respect ZEEK_MAX_CONCURRENT instead of blocking forever on a nil channel.
 func (e *Executor) WithTimeout(timeout time.Duration) *Executor {
-	return &Executor{config: ExecutorConfig{
-		ZeekBinary: e.config.ZeekBinary,
-		Timeout:    timeout,
-	}}
+	return &Executor{
+		config: ExecutorConfig{
+			ZeekBinary: e.config.ZeekBinary,
+			Timeout:    timeout,
+		},
+		sem: e.sem,
+	}
 }
 
 func (e *Executor) RunDetection(ctx context.Context, pcapPath string, scripts []string, extractDir string, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:     "triage_pcap",
-		PcapPath: pcapPath,
-		Status:   "completed",
-		Alerts:   []StandardAlert{},
-		Errors:   []ExecutionError{},
+		SchemaVersion: "2.0",
+		Engine:        "zeek",
+		Tool:          "triage_pcap",
+		PcapPath:      pcapPath,
+		Status:        "completed",
+		Alerts:        []StandardAlert{},
+		Errors:        []ExecutionError{},
 	}
 
 	run := e.runZeek(ctx, pcapPath, scripts, extractDir, nil, nil, retainWorkDir())
 	defer run.cleanup()
 	e.applyRunResult(result, run, startTime, scripts, extractDir)
 	result.Alerts = e.parseAlerts(run.WorkDir, scripts)
-	result.Files = e.collectExtractedFiles(extractDir)
+	result.Files = e.collectExtractedFiles(run.WorkDir, extractDir)
 	e.persistZeekLogs(run.WorkDir, result, artifactRun)
 	result.Statistics.TotalAlerts = len(result.Alerts)
 	result.Statistics.TotalFiles = len(result.Files)
@@ -150,12 +195,14 @@ func (e *Executor) RunDetection(ctx context.Context, pcapPath string, scripts []
 func (e *Executor) GenerateLogs(ctx context.Context, pcapPath string, logs []string, maxRecords int, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:         "summarize_logs",
-		PcapPath:     pcapPath,
-		Status:       "completed",
-		Alerts:       []StandardAlert{},
-		LogSummaries: make(map[string]LogSummary),
-		Errors:       []ExecutionError{},
+		SchemaVersion: "2.0",
+		Engine:        "zeek",
+		Tool:          "summarize_logs",
+		PcapPath:      pcapPath,
+		Status:        "completed",
+		Alerts:        []StandardAlert{},
+		LogSummaries:  make(map[string]LogSummary),
+		Errors:        []ExecutionError{},
 	}
 
 	run := e.runZeek(ctx, pcapPath, nil, "", nil, nil, retainWorkDir())
@@ -178,11 +225,13 @@ func (e *Executor) GenerateLogs(ctx context.Context, pcapPath string, logs []str
 func (e *Executor) RunCustomScript(ctx context.Context, pcapPath, scriptContent string, timeout time.Duration, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:     "run_custom_script",
-		PcapPath: pcapPath,
-		Status:   "completed",
-		Alerts:   []StandardAlert{},
-		Errors:   []ExecutionError{},
+		SchemaVersion: "2.0",
+		Engine:        "zeek",
+		Tool:          "run_custom_script",
+		PcapPath:      pcapPath,
+		Status:        "completed",
+		Alerts:        []StandardAlert{},
+		Errors:        []ExecutionError{},
 	}
 
 	if problems := validateCustomScriptSafety(scriptContent); len(problems) > 0 {
@@ -231,12 +280,14 @@ func (e *Executor) RunCustomScript(ctx context.Context, pcapPath, scriptContent 
 func (e *Executor) RunSignature(ctx context.Context, pcapPath, signaturePath string, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:         "hunt_signature",
-		PcapPath:     pcapPath,
-		Status:       "completed",
-		Alerts:       []StandardAlert{},
-		LogSummaries: make(map[string]LogSummary),
-		Errors:       []ExecutionError{},
+		SchemaVersion: "2.0",
+		Engine:        "zeek",
+		Tool:          "hunt_signature",
+		PcapPath:      pcapPath,
+		Status:        "completed",
+		Alerts:        []StandardAlert{},
+		LogSummaries:  make(map[string]LogSummary),
+		Errors:        []ExecutionError{},
 	}
 
 	if signaturePath == "" {
@@ -264,12 +315,14 @@ func (e *Executor) RunSignature(ctx context.Context, pcapPath, signaturePath str
 func (e *Executor) RunScriptsWithLogSummary(ctx context.Context, tool, pcapPath string, scripts []string, logNames []string, maxRecords int, artifactRun *ArtifactRun) *ExecutionResult {
 	startTime := time.Now()
 	result := &ExecutionResult{
-		Tool:         tool,
-		PcapPath:     pcapPath,
-		Status:       "completed",
-		Alerts:       []StandardAlert{},
-		LogSummaries: make(map[string]LogSummary),
-		Errors:       []ExecutionError{},
+		SchemaVersion: "2.0",
+		Engine:        "zeek",
+		Tool:          tool,
+		PcapPath:      pcapPath,
+		Status:        "completed",
+		Alerts:        []StandardAlert{},
+		LogSummaries:  make(map[string]LogSummary),
+		Errors:        []ExecutionError{},
 	}
 
 	run := e.runZeek(ctx, pcapPath, scripts, "", nil, nil, retainWorkDir())
@@ -290,14 +343,15 @@ func (e *Executor) RunScriptsWithLogSummary(ctx context.Context, tool, pcapPath 
 }
 
 type zeekRun struct {
-	WorkDir  string
-	Stderr   string
-	Err      error
-	Timeout  bool
-	Retained bool
-	Cleanup  func()
-	Skipped  bool
-	Warnings []string
+	WorkDir       string
+	Stderr        string
+	Err           error
+	Timeout       bool
+	Retained      bool
+	Cleanup       func()
+	Skipped       bool
+	Warnings      []string
+	StagingErrors []ExecutionError
 }
 
 func (run zeekRun) cleanup() {
@@ -326,7 +380,8 @@ func (e *Executor) runZeek(ctx context.Context, pcapPath string, scripts []strin
 		run.Cleanup = func() {}
 	}
 
-	localScriptPaths := e.copyLocalScripts(workDir, scripts)
+	localScriptPaths, stagingErrors := e.copyLocalScripts(workDir, scripts)
+	run.StagingErrors = stagingErrors
 	args := []string{"-C", "-r", pcapPath}
 	args = append(args, extraArgs...)
 	args = append(args, localScriptPaths...)
@@ -373,7 +428,11 @@ func (e *Executor) runZeek(ctx context.Context, pcapPath string, scripts []strin
 func (e *Executor) applyRunResult(result *ExecutionResult, run zeekRun, startTime time.Time, scripts []string, extractDir string) {
 	result.WorkDirRetained = run.Retained
 	result.Warnings = append(result.Warnings, run.Warnings...)
-	result.Statistics.TotalScriptsRun = len(scripts)
+	result.Errors = append(result.Errors, run.StagingErrors...)
+	result.Statistics.TotalScriptsRun = len(scripts) - len(run.StagingErrors)
+	if result.Statistics.TotalScriptsRun < 0 {
+		result.Statistics.TotalScriptsRun = 0
+	}
 	if run.Retained && run.WorkDir != "" {
 		result.LogPaths = e.logPaths(run.WorkDir)
 	}
@@ -409,37 +468,45 @@ func (e *Executor) applyRunResult(result *ExecutionResult, run zeekRun, startTim
 	_ = extractDir
 }
 
-func (e *Executor) copyLocalScripts(workDir string, scriptPaths []string) []string {
+func (e *Executor) copyLocalScripts(workDir string, scriptPaths []string) ([]string, []ExecutionError) {
 	var result []string
+	var stagingErrors []ExecutionError
 	for _, p := range scriptPaths {
-		localPath := e.copyLocalScript(workDir, filepath.Base(p), filepath.Dir(p))
-		if localPath != "" {
-			result = append(result, localPath)
+		localPath, err := e.copyLocalScript(workDir, filepath.Base(p), filepath.Dir(p))
+		if err != nil {
+			stagingErrors = append(stagingErrors, ExecutionError{
+				Script:    filepath.Base(p),
+				ErrorType: "staging_failed",
+				Message:   err.Error(),
+			})
+			continue
 		}
+		result = append(result, localPath)
 	}
-	return result
+	return result, stagingErrors
 }
 
-func (e *Executor) copyLocalScript(workDir string, name string, srcDir string) string {
+func (e *Executor) copyLocalScript(workDir string, name string, srcDir string) (string, error) {
 	src := filepath.Join(srcDir, name)
-	if _, err := os.Stat(src); os.IsNotExist(err) {
-		return ""
+	if _, err := os.Stat(src); err != nil {
+		return "", fmt.Errorf("script not found: %s", src)
 	}
 
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("failed to read script %s: %w", src, err)
 	}
 
 	dst := filepath.Join(workDir, name)
 	if err := os.WriteFile(dst, data, 0644); err != nil {
-		return ""
+		return "", fmt.Errorf("failed to stage script %s: %w", src, err)
 	}
-	return dst
+	return dst, nil
 }
 
 func (e *Executor) writeLocalConfig(cfgPath, extractDir string) {
 	var lines []string
+	lines = append(lines, `@load policy/protocols/conn/community-id-logging`)
 	lines = append(lines, `redef LogAscii::use_json = T;`)
 	lines = append(lines, `redef Log::default_rotation_interval = 0 secs;`)
 	if extractDir != "" {
@@ -472,16 +539,23 @@ func (e *Executor) parseAlerts(workDir string, scriptPaths []string) []StandardA
 		return alerts
 	}
 
+	metadata := make([]*ScriptMeta, 0, len(scriptPaths))
+	for _, path := range scriptPaths {
+		if meta, _ := parseScriptMeta(path, ScriptTypeDetection); meta != nil {
+			metadata = append(metadata, meta)
+		}
+	}
+	flows := readConnFlowRefs(filepath.Join(workDir, "conn.log"))
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), "notice") && strings.HasSuffix(entry.Name(), ".log") {
-			alerts = append(alerts, e.parseNoticeLog(filepath.Join(workDir, entry.Name()))...)
+			alerts = append(alerts, e.parseNoticeLog(filepath.Join(workDir, entry.Name()), metadata, flows)...)
 		}
 	}
 
 	return alerts
 }
 
-func (e *Executor) parseNoticeLog(logPath string) []StandardAlert {
+func (e *Executor) parseNoticeLog(logPath string, metadata []*ScriptMeta, flows map[string]FlowRefV2) []StandardAlert {
 	var alerts []StandardAlert
 
 	f, err := os.Open(logPath)
@@ -493,7 +567,9 @@ func (e *Executor) parseNoticeLog(logPath string) []StandardAlert {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || line[0] == '#' {
 			continue
@@ -505,12 +581,18 @@ func (e *Executor) parseNoticeLog(logPath string) []StandardAlert {
 		}
 
 		alert := StandardAlert{
-			Evidence:   make(map[string]interface{}),
-			Confidence: 0.85,
+			Evidence:         make(map[string]interface{}),
+			Severity:         "unknown",
+			AttackTechniques: []string{},
+			LogLocator: LogLocatorV2{
+				Log: "notice", Path: logPath, Line: lineNumber,
+				RecordSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(line))),
+			},
 		}
 
 		if v, ok := entry["uid"].(string); ok {
-			alert.AlertID = v
+			alert.FlowRef = flows[v]
+			alert.FlowRef.ZeekUID = v
 		}
 		if v, ok := entry["note"].(string); ok {
 			alert.Rule = v
@@ -526,22 +608,44 @@ func (e *Executor) parseNoticeLog(logPath string) []StandardAlert {
 			alert.Timestamp = fmt.Sprintf("%.6f", v)
 		}
 
-		if v, ok := entry["id.orig_h"].(string); ok {
+		if v, ok := entry["id.orig_h"].(string); ok && v != "" {
+			alert.Src.IP = v
+			alert.Evidence["src_ip"] = v
+		} else if v, ok := entry["src"].(string); ok && v != "" {
 			alert.Src.IP = v
 			alert.Evidence["src_ip"] = v
 		}
-		if v, ok := entry["id.resp_h"].(string); ok {
+		if v, ok := entry["id.resp_h"].(string); ok && v != "" {
+			alert.Dst.IP = v
+			alert.Evidence["dst_ip"] = v
+		} else if v, ok := entry["dst"].(string); ok && v != "" {
 			alert.Dst.IP = v
 			alert.Evidence["dst_ip"] = v
 		}
-		if v, ok := entry["id.orig_p"].(float64); ok {
+		if v, ok := entry["id.orig_p"].(float64); ok && int(v) > 0 {
 			alert.Src.Port = int(v)
+		} else if p := noticePort(entry["src_p"]); p > 0 {
+			alert.Src.Port = p
 		}
-		if v, ok := entry["id.resp_p"].(float64); ok {
+		if v, ok := entry["id.resp_p"].(float64); ok && int(v) > 0 {
 			alert.Dst.Port = int(v)
+		} else if p := noticePort(entry["dst_p"]); p > 0 {
+			alert.Dst.Port = p
 		}
-		if v, ok := entry["proto"].(string); ok {
+		if v, ok := entry["proto"].(string); ok && v != "" {
 			alert.Proto = v
+		} else if alert.Proto == "" {
+			if proto, ok := noticePortProto(entry["src_p"]); ok {
+				alert.Proto = proto
+			}
+		}
+		if alert.FlowRef.SrcIP == "" {
+			alert.FlowRef.SrcIP = alert.Src.IP
+			alert.FlowRef.SrcPort = alert.Src.Port
+			alert.FlowRef.DstIP = alert.Dst.IP
+			alert.FlowRef.DstPort = alert.Dst.Port
+			alert.FlowRef.Protocol = alert.Proto
+			alert.FlowRef.StartTime = alert.Timestamp
 		}
 
 		if alert.Src.IP != "" {
@@ -551,48 +655,120 @@ func (e *Executor) parseNoticeLog(logPath string) []StandardAlert {
 			}
 		}
 
-		alert.determineConfidenceAndSeverity()
+		for _, meta := range metadata {
+			if containsString(meta.NoticeTypes, alert.Rule) {
+				alert.Script = meta.Name
+				alert.RuleVersion = meta.RuleVersion
+				alert.DetectionPack = meta.DetectionPack
+				alert.DetectionPackVersion = meta.PackVersion
+				alert.Category = meta.Category
+				alert.Severity = meta.Severity
+				alert.Confidence = meta.Confidence
+				alert.AttackTechniques = append([]string{}, meta.AttackTechniques...)
+				alert.ScriptChecksum = meta.Checksum
+				break
+			}
+		}
+		alert.AlertID = stableAlertID(alert)
 		alerts = append(alerts, alert)
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("failed to read notice log completely; remaining records were skipped", "path", logPath, "error", err)
 	}
 
 	return alerts
 }
 
-func (a *StandardAlert) determineConfidenceAndSeverity() {
-	ruleLower := strings.ToLower(a.Rule)
-	msgLower := strings.ToLower(a.Msg)
-
-	highConfKeywords := []string{"bruteforce", "password_guessing", "exploit", "injection", "overflow", "shell", "backdoor", "ransomware", "apt", "c2", "beacon"}
-	mediumConfKeywords := []string{"scan", "flood", "flooding", "anomaly", "suspicious", "abnormal", "policy", "recon"}
-	lowConfKeywords := []string{"info", "notice", "dns", "connection"}
-
-	for _, kw := range highConfKeywords {
-		if strings.Contains(ruleLower, kw) || strings.Contains(msgLower, kw) {
-			a.Confidence = 0.95
-			a.Severity = "high"
-			return
+// noticePort extracts the numeric port from Zeek notice port fields, which are
+// rendered as "<port>/<proto>" strings in JSON logs (e.g. "80/tcp").
+func noticePort(value interface{}) int {
+	switch v := value.(type) {
+	case float64:
+		return int(v)
+	case string:
+		port, err := strconv.Atoi(strings.SplitN(v, "/", 2)[0])
+		if err != nil {
+			return 0
 		}
+		return port
 	}
-	for _, kw := range mediumConfKeywords {
-		if strings.Contains(ruleLower, kw) || strings.Contains(msgLower, kw) {
-			a.Confidence = 0.75
-			a.Severity = "medium"
-			return
-		}
-	}
-	for _, kw := range lowConfKeywords {
-		if strings.Contains(ruleLower, kw) || strings.Contains(msgLower, kw) {
-			a.Confidence = 0.55
-			a.Severity = "low"
-			return
-		}
-	}
-
-	a.Severity = "info"
-	a.Confidence = 0.4
+	return 0
 }
 
-func (e *Executor) collectExtractedFiles(extractDir string) []ExtractedFile {
+func noticePortProto(value interface{}) (string, bool) {
+	s, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	if idx := strings.Index(s, "/"); idx >= 0 && idx+1 < len(s) {
+		return s[idx+1:], true
+	}
+	return "", false
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func stableAlertID(alert StandardAlert) string {
+	raw := strings.Join([]string{
+		alert.Rule, alert.FlowRef.CommunityID, alert.FlowRef.ZeekUID,
+		alert.Timestamp, alert.Src.IP, alert.Dst.IP,
+	}, "|")
+	sum := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("za_%x", sum[:10])
+}
+
+func readConnFlowRefs(path string) map[string]FlowRefV2 {
+	result := map[string]FlowRefV2{}
+	file, err := os.Open(path)
+	if err != nil {
+		return result
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		var entry map[string]interface{}
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		uid, _ := entry["uid"].(string)
+		if uid == "" {
+			continue
+		}
+		flow := FlowRefV2{ZeekUID: uid}
+		flow.CommunityID, _ = entry["community_id"].(string)
+		flow.SrcIP, _ = entry["id.orig_h"].(string)
+		flow.DstIP, _ = entry["id.resp_h"].(string)
+		flow.Protocol, _ = entry["proto"].(string)
+		if value, ok := entry["id.orig_p"].(float64); ok {
+			flow.SrcPort = int(value)
+		}
+		if value, ok := entry["id.resp_p"].(float64); ok {
+			flow.DstPort = int(value)
+		}
+		if value, ok := entry["ts"].(float64); ok {
+			flow.StartTime = fmt.Sprintf("%.6f", value)
+		}
+		result[uid] = flow
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("failed to read conn.log completely; flow references may be incomplete", "path", path, "error", err)
+	}
+	return result
+}
+
+func (e *Executor) collectExtractedFiles(workDir, extractDir string) []ExtractedFile {
 	var files []ExtractedFile
 	if extractDir == "" {
 		return files
@@ -602,6 +778,8 @@ func (e *Executor) collectExtractedFiles(extractDir string) []ExtractedFile {
 	if err != nil {
 		return files
 	}
+
+	integrityByFuid := readFilesLogIntegrity(filepath.Join(workDir, "files.log"))
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -617,16 +795,60 @@ func (e *Executor) collectExtractedFiles(extractDir string) []ExtractedFile {
 			continue
 		}
 
+		path := filepath.Join(extractDir, name)
+		fuid := strings.SplitN(name, "-", 2)[0]
+		integrity, ok := integrityByFuid[fuid]
+		if !ok {
+			integrity = "unknown"
+		}
 		files = append(files, ExtractedFile{
-			ID:       name,
-			Name:     name,
-			Path:     filepath.Join(extractDir, name),
-			Size:     info.Size(),
-			MimeType: detectMimeType(filepath.Join(extractDir, name)),
+			ID: name, FUID: fuid, Name: name, Path: path, Size: info.Size(),
+			SHA256: fileSHA256(path), MimeType: detectMimeType(path), Integrity: integrity,
 		})
 	}
 
 	return files
+}
+
+// readFilesLogIntegrity maps fuid -> extraction integrity derived from files.log.
+// A file is "incomplete" when Zeek reported missing bytes or a timeout; files
+// absent from files.log are reported as "unknown" by the caller.
+func readFilesLogIntegrity(path string) map[string]string {
+	result := map[string]string{}
+	f, err := os.Open(path)
+	if err != nil {
+		return result
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		var entry map[string]interface{}
+		if json.Unmarshal([]byte(line), &entry) != nil {
+			continue
+		}
+		fuid, _ := entry["fuid"].(string)
+		if fuid == "" {
+			continue
+		}
+		integrity := "complete"
+		if missing, ok := entry["missing_bytes"].(float64); ok && missing > 0 {
+			integrity = "incomplete"
+		}
+		if timedOut, ok := entry["timeout"].(bool); ok && timedOut {
+			integrity = "incomplete"
+		}
+		result[fuid] = integrity
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("failed to read files.log completely; extraction integrity may be incomplete", "path", path, "error", err)
+	}
+	return result
 }
 
 func (e *Executor) persistZeekLogs(workDir string, result *ExecutionResult, artifactRun *ArtifactRun) string {
@@ -640,8 +862,23 @@ func (e *Executor) persistZeekLogs(workDir string, result *ExecutionResult, arti
 	}
 	if len(logPaths) > 0 {
 		result.LogPaths = logPaths
+		rewriteAlertLogLocators(result.Alerts, logPaths)
 	}
 	return artifactRun.LogsDir
+}
+
+// rewriteAlertLogLocators points alert evidence locators at the persisted copy
+// of each log so the referenced file survives temporary work directory cleanup.
+func rewriteAlertLogLocators(alerts []StandardAlert, logPaths map[string]string) {
+	for i := range alerts {
+		if alerts[i].LogLocator.Path == "" {
+			continue
+		}
+		name := strings.TrimSuffix(filepath.Base(alerts[i].LogLocator.Path), ".log")
+		if persisted, ok := logPaths[name]; ok {
+			alerts[i].LogLocator.Path = persisted
+		}
+	}
 }
 
 func (e *Executor) summarizeLogs(workDir string, requested []string, maxRecords int) map[string]LogSummary {
@@ -704,6 +941,11 @@ func readLogSummary(path string, maxRecords int) LogSummary {
 			summary.Sample = append(summary.Sample, entry)
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		summary.ReadError = err.Error()
+		slog.Warn("failed to read Zeek log completely; record count is partial", "path", path, "error", err)
+	}
+	summary.SampleTruncated = summary.Records > len(summary.Sample)
 	for key := range fields {
 		summary.FieldsSeen = append(summary.FieldsSeen, key)
 	}

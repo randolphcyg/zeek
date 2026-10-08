@@ -7,8 +7,8 @@ import (
 func buildTools() []mcp.Tool {
 	tools := []mcp.Tool{
 		{
-			Name:        "triage_pcap",
-			Description: "Composite workflow tool: inspect capture metadata, run all enabled detection scripts, and return a unified triage summary with manifest references. Set extract_files=true to also run file extraction scripts. Recommended single-call tool for routine pcap analysis.",
+			Name:        "analyze_pcap",
+			Description: "Run one reusable Zeek analysis pass. baseline produces protocol logs and Community ID without custom detections; standard runs protocol-relevant detections; full runs every enabled detection.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -16,10 +16,11 @@ func buildTools() []mcp.Tool {
 						"type":        "string",
 						"description": "Path to a pcap file. Use the zeek://pcaps resource to discover available files.",
 					},
-					"scripts": map[string]interface{}{
-						"type":        "array",
-						"items":       map[string]interface{}{"type": "string"},
-						"description": "Optional detection script names or ScriptIDs. Omit to run all enabled detection scripts.",
+					"profile": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"baseline", "standard", "full"},
+						"default":     "baseline",
+						"description": "Analysis profile. baseline is the deterministic preflight pass.",
 					},
 					"extract_files": map[string]interface{}{
 						"type":        "boolean",
@@ -34,32 +35,49 @@ func buildTools() []mcp.Tool {
 			},
 		},
 		{
-			Name:        "summarize_logs",
-			Description: "Run Zeek on a pcap and return compact JSON summaries for selected Zeek logs.",
+			Name:        "query_logs",
+			Description: "Query persisted JSON logs from an existing analyze_pcap run. This never reparses the PCAP.",
 			InputSchema: mcp.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
-					"pcap_path": map[string]interface{}{
+					"run_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Path to a pcap file. Use the zeek://pcaps resource to discover available files.",
+						"description": "Run identifier returned by analyze_pcap.",
 					},
-					"logs": map[string]interface{}{
-						"type": "array",
-						"items": map[string]interface{}{
-							"type": "string",
-						},
-						"description": "Log names to summarize, such as conn, dns, http, ssl, x509, files, ssh, smtp, smb, rdp, tunnel, weird, notice, or analyzer. When omitted, summarizes all available log types.",
+					"log": map[string]interface{}{
+						"type":        "string",
+						"description": "Persisted Zeek log name, for example conn, dns, http, ssl, notice, weird.",
 					},
-					"max_records": map[string]interface{}{
-						"type":        "number",
-						"description": "Maximum records to include per log summary. Defaults to 20.",
+					"select": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Optional field projection.",
+					},
+					"predicates": map[string]interface{}{
+						"type":        "object",
+						"description": "Optional exact-match field predicates.",
+					},
+					"aggregate": map[string]interface{}{
+						"type":    "string",
+						"enum":    []string{"none", "count"},
+						"default": "none",
+					},
+					"limit": map[string]interface{}{
+						"type":    "integer",
+						"minimum": 1,
+						"maximum": 500,
+						"default": 100,
+					},
+					"cursor": map[string]interface{}{
+						"type":        "string",
+						"description": "Opaque cursor returned by the previous query.",
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",
-						"description": "Writable output root. Defaults to /outputs when available.",
+						"description": "The output root used by analyze_pcap.",
 					},
 				},
-				Required: []string{"pcap_path"},
+				Required: []string{"run_id", "log"},
 			},
 		},
 		{
@@ -79,32 +97,6 @@ func buildTools() []mcp.Tool {
 					"intel_file": map[string]interface{}{
 						"type":        "string",
 						"description": "Optional path to a Zeek Intel TSV file.",
-					},
-					"output_dir": map[string]interface{}{
-						"type":        "string",
-						"description": "Writable output root. Defaults to /outputs when available.",
-					},
-				},
-				Required: []string{"pcap_path"},
-			},
-		},
-		{
-			Name:        "hunt_signature",
-			Description: "Validate and run Zeek signature content or a signature file against a pcap. Signature syntax is validated by Zeek's built-in signature framework at runtime.",
-			InputSchema: mcp.ToolInputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"pcap_path": map[string]interface{}{
-						"type":        "string",
-						"description": "Path to a pcap file. Use the zeek://pcaps resource to discover available files.",
-					},
-					"signature_content": map[string]interface{}{
-						"type":        "string",
-						"description": "Zeek signature content to execute.",
-					},
-					"signature_path": map[string]interface{}{
-						"type":        "string",
-						"description": "Absolute path to a Zeek signature file.",
 					},
 					"output_dir": map[string]interface{}{
 						"type":        "string",

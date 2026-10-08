@@ -1,21 +1,31 @@
-# ScriptID: DETECT_SSH_BRTFORCE_v1
-# Type: detection
-# Category: brute_force
-# Description: Detect repeated SSH password guessing using Zeek SSH bruteforce policy logic.
-# Signature: A source exceeds the configured SSH password-guessing threshold.
+# SCRIPT_ID: DETECT_SSH_BRTFORCE_v1
 # NoticeTypes: SSH::Password_Guessing
-# Enabled: true
+# RuleVersion: 1.0.0
+# DetectionPack: enterprise
+# PackVersion: 2.0.0
+# Severity: medium
+# Confidence: 0.75
+# Protocols: ssh
+# ATT&CK: T1110
+# RequiredLogs: ssh
+# FalsePositives: 跳板机、自动化任务凭据失效或共享出口可能触发阈值。
+
+# 恶意行为检测脚本配置
+# 行为类型：SSH暴力破解攻击
+# 行为分类：暴力破解
+# 行为描述：检测针对SSH服务的频繁登录尝试，限制密码猜测次数
+# 攻击特征：同一来源对SSH服务发起连续认证尝试并超过密码猜测阈值，呈现暴力破解行为
 
 @load protocols/ssh/detect-bruteforcing
 
-# Tunable threshold for offline analysis.
+# 离线样本可通过单独 redef 覆盖，默认保持更接近生产的阈值
 redef SSH::password_guesses_limit = 10;
 redef SSH::guessing_timeout = 30 mins;
 
-# Detection logic.
+# 定义 Hook，当检测到暴力破解时触发
 hook Notice::policy(n: Notice::Info) {
     if ( n$note == SSH::Password_Guessing ) {
-        # Script configuration.
+        # 离线分析模式：仅记录日志
         add n$actions[Notice::ACTION_LOG];
     }
 }

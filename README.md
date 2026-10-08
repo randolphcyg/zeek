@@ -2,18 +2,18 @@
 
 Zeek MCP is a local stdio MCP server that lets agents run bundled Zeek detection scripts against pcaps, extract files, summarize Zeek logs, run Intel matching, and execute Zeek signatures.
 
-The project targets offline pcap analysis on Zeek 8.0.8 LTS. Newer feature releases may work, but release validation should include the Zeek 8.0.8 container. Live Zeek cluster and supervisor operations are intentionally out of scope.
+The project targets offline pcap analysis on Zeek 9.0.0 LTS. Newer feature releases may work, but release validation should include the Zeek 9.0.0 container. Live Zeek cluster and supervisor operations are intentionally out of scope.
 
 ## Requirements
 
 - Docker, for the recommended GHCR image runtime
-- Go 1.22 or newer, only for native builds
-- Zeek 8.0.8 LTS or compatible, only for native runtime
+- Go 1.26 or newer, only for native builds
+- Zeek 9.0.0 LTS or compatible, only for native runtime
 - Optional `capinfos` for richer native pcap inspection (packet count and duration)
 
 ## Install From GHCR
 
-Docker is the recommended installation path because the image includes the validated Zeek 8.0.8 runtime. The published image for this repository is:
+Docker is the recommended installation path because the image includes the validated Zeek 9.0.0 runtime. The published image for this repository is:
 
 ```bash
 docker pull ghcr.io/randolphcyg/zeek:latest
@@ -44,9 +44,9 @@ Native builds are advanced mode because the host must provide Zeek:
 ./build.sh -s
 ```
 
-The server binary is written to `bin/zeek`.
+The server binary is written to `bin/zeek-mcp` and the CLI to `bin/zeek-pcap`.
 
-Docker builds use `zeek/zeek:8.0.8` by default. The default image is Zeek-only and does not need Wireshark CLI tools:
+Docker builds use `public.ecr.aws/zeek/zeek:9.0.0` by default. The default image is Zeek-only and does not need Wireshark CLI tools:
 
 ```bash
 ./build.sh -d
@@ -68,10 +68,10 @@ Docker builds use the current Docker daemon platform by default. Pass `--platfor
 ## Run
 
 ```bash
-./bin/zeek --base-dir /path/to/zeek --scripts-dir /path/to/zeek/scripts
+./bin/zeek-mcp --base-dir /path/to/zeek --scripts-dir /path/to/zeek/scripts
 ```
 
-Docker is the recommended MCP runtime when you need the bundled Zeek 8.0.8 environment. Mount the host user directory at the same path for transparent path access:
+Docker is the recommended MCP runtime when you need the bundled Zeek 9.0.0 environment. Mount the host user directory at the same path for transparent path access:
 
 ```bash
 # macOS — mount /Users so any absolute path works directly
@@ -117,9 +117,9 @@ runs/<run_id>/
 
 The response includes `run_id`, `run_dir`, `manifest_path`, and `artifacts`. Downstream agents can read `manifest.json` directly from the artifact path.
 
-`capinfos` is not required for core detection, extraction, log generation, Intel matching, signature matching, or custom script execution. Without it, `triage_pcap` still validates paths and returns Zeek-driven metadata including protocol summaries and timing information. Protocol detection uses Zeek's own log output as a fallback.
+`capinfos` is not required for core detection, extraction, log generation, Intel matching, or sandboxed custom script execution. Without it, `analyze_pcap` still validates paths and returns Zeek-driven protocol metadata.
 
-If Docker BuildKit fails while checking remote base-image metadata but `zeek/zeek:8.0.8` is already cached locally, use the local builder:
+If Docker BuildKit fails while checking remote base-image metadata but `public.ecr.aws/zeek/zeek:9.0.0` is already cached locally, use the local builder:
 
 ```bash
 ./build.sh -d --legacy-builder
@@ -149,7 +149,7 @@ Useful environment variables:
 Equivalent CLI flag:
 
 ```bash
-./bin/zeek --path-map /host/pcaps=/pcaps
+./bin/zeek-mcp --path-map /host/pcaps=/pcaps
 ```
 
 ## Script Layout
@@ -175,19 +175,18 @@ Every script uses the same metadata header:
 # Enabled: true
 ```
 
-Extraction scripts are discoverable, but `triage_pcap` only runs `Type: detection` scripts by default. File extraction is enabled through `extract_files=true` or the standalone `extract_files` tool.
+Extraction scripts are discoverable, but `analyze_pcap` runs them only when `extract_files=true` or through the standalone `extract_files` tool.
 
 ## MCP Tools
 
-- `triage_pcap`: inspect a capture, run detections, optionally extract files, and return a compact triage summary.
-- `summarize_logs`: summarize selected Zeek logs.
+- `analyze_pcap`: one reusable pass with `baseline`, `standard`, or `full` profile. `baseline` does not run custom detections.
+- `query_logs`: paginate, project, and filter logs from an existing run without reparsing the PCAP.
 - `hunt_intel`: run Zeek Intel matching for supplied indicators.
-- `hunt_signature`: run Zeek signature files or content.
 - `extract_files`: extract files from pcap using bundled extraction scripts.
 - `validate_script`: run `zeek --parse-only`.
 - `run_custom_script`: validate and run generated Zeek scripts, only registered when `ZEEK_ENABLE_CUSTOM_SCRIPT=true`.
 
-`triage_pcap` supports multiple scripts in one pcap analysis through the `scripts` array. If `scripts` is omitted, Zeek MCP runs all enabled detection scripts.
+Every run enables Community ID logging. `standard` selects protocol-relevant scripts; `full` runs every enabled detection script.
 
 Use the `zeek://pcaps` resource to discover available pcap files, `zeek://scripts/detections` for available detection scripts, and `zeek://scripts/{id}` to view individual script metadata and source.
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ type PcapInfo struct {
 	PacketCount    int      `json:"packet_count"`
 	Duration       float64  `json:"duration_sec"`
 	DurationKnown  bool     `json:"duration_known"`
+	Sampled        bool     `json:"sampled,omitempty"`
 	Protocols      []string `json:"protocols"`
 	TopTalkers     []Talker `json:"top_talkers"`
 	Services       []string `json:"services"`
@@ -104,7 +106,7 @@ func enrichPcapInfoFromZeek(info *PcapInfo, pcapPath string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(envInt("ZEEK_INSPECT_TIMEOUT_SECONDS", 60))*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "zeek", "-C", "-r", pcapPath, localZeekCfg)
+	cmd := exec.CommandContext(ctx, envOrDefault("ZEEK_BINARY", "zeek"), "-C", "-r", pcapPath, localZeekCfg)
 	cmd.Dir = workDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -136,6 +138,9 @@ func applyZeekLogMetadata(info *PcapInfo, workDir string) bool {
 		{name: "x509", protocols: []string{"tls"}},
 		{name: "ssh", protocols: []string{"ssh", "tcp"}, services: []string{"ssh"}},
 		{name: "smtp", protocols: []string{"smtp", "tcp"}, services: []string{"smtp"}},
+		{name: "ntp", protocols: []string{"ntp", "udp"}, services: []string{"ntp"}},
+		{name: "ntp_control", protocols: []string{"ntp", "udp"}, services: []string{"ntp"}},
+		{name: "ntp_private", protocols: []string{"ntp", "udp"}, services: []string{"ntp"}},
 		{name: "smb_files", protocols: []string{"smb", "tcp"}, services: []string{"smb"}},
 		{name: "smb_mapping", protocols: []string{"smb", "tcp"}, services: []string{"smb"}},
 		{name: "rdp", protocols: []string{"rdp", "tcp"}, services: []string{"rdp"}},
@@ -147,6 +152,7 @@ func applyZeekLogMetadata(info *PcapInfo, workDir string) bool {
 
 	metadataFound := false
 	var minTS, maxTS float64
+	var maxConnEndTS float64
 	updateTS := func(v interface{}) {
 		ts, ok := v.(float64)
 		if !ok || ts <= 0 {
@@ -165,11 +171,15 @@ func applyZeekLogMetadata(info *PcapInfo, workDir string) bool {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		records := readZeekJSONRecords(path, 512)
+		records, sampled := readZeekJSONRecords(path, 512)
 		if len(records) == 0 {
 			continue
 		}
 		metadataFound = true
+		if sampled {
+			info.Sampled = true
+			info.Warnings = append(info.Warnings, fmt.Sprintf("capture metadata for %s is based on a sample of the log", hint.name))
+		}
 		for _, proto := range hint.protocols {
 			info.Protocols = appendIfMissing(info.Protocols, proto)
 		}
@@ -181,9 +191,14 @@ func applyZeekLogMetadata(info *PcapInfo, workDir string) bool {
 		}
 	}
 
-	connRecords := readZeekJSONRecords(filepath.Join(workDir, "conn.log"), 2048)
+	connRecords, connSampled := readZeekJSONRecords(filepath.Join(workDir, "conn.log"), 2048)
+	connComplete := !connSampled
 	if len(connRecords) > 0 {
 		metadataFound = true
+		if connSampled {
+			info.Sampled = true
+			info.Warnings = append(info.Warnings, "conn metadata is based on a sample of the log")
+		}
 		for _, record := range connRecords {
 			updateTS(record["ts"])
 			if proto, ok := record["proto"].(string); ok && proto != "" {
@@ -192,43 +207,75 @@ func applyZeekLogMetadata(info *PcapInfo, workDir string) bool {
 			if service, ok := record["service"].(string); ok && service != "" {
 				info.Services = appendIfMissing(info.Services, service)
 			}
+			ts, tsOK := record["ts"].(float64)
+			duration, durOK := record["duration"].(float64)
+			if tsOK && durOK && duration >= 0 && ts+duration > maxConnEndTS {
+				maxConnEndTS = ts + duration
+			}
 		}
 	}
 
 	sort.Strings(info.Protocols)
 	sort.Strings(info.Services)
-	if !info.DurationKnown && minTS > 0 && maxTS >= minTS {
-		info.Duration = maxTS - minTS
-		info.DurationKnown = true
+	if !info.DurationKnown && minTS > 0 {
+		spanEnd := maxTS
+		if maxConnEndTS > spanEnd {
+			spanEnd = maxConnEndTS
+		}
+		if spanEnd >= minTS {
+			info.Duration = spanEnd - minTS
+			info.DurationKnown = true
+			if !connComplete {
+				info.Warnings = append(info.Warnings, "capture duration is estimated from sampled log records and may be shorter than the real capture")
+			}
+		}
 	}
 	return metadataFound
 }
 
-func readZeekJSONRecords(path string, limit int) []map[string]interface{} {
+func readZeekJSONRecords(path string, limit int) ([]map[string]interface{}, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer f.Close()
 
 	var records []map[string]interface{}
+	truncated := false
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+	readLine := func() (map[string]interface{}, bool) {
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			var record map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				continue
+			}
+			return record, true
 		}
-		var record map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			continue
+		return nil, false
+	}
+	for {
+		record, ok := readLine()
+		if !ok {
+			break
 		}
 		records = append(records, record)
 		if limit > 0 && len(records) >= limit {
+			if _, more := readLine(); more {
+				truncated = true
+			}
 			break
 		}
 	}
-	return records
+	if err := scanner.Err(); err != nil {
+		slog.Warn("failed to read Zeek log completely", "path", path, "error", err)
+		return records, true
+	}
+	return records, truncated
 }
 
 func appendIfMissing(slice []string, s string) []string {
